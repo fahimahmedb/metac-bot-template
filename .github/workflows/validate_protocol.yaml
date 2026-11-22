@@ -9,6 +9,8 @@ on:
       - publication_guard.py
       - .github/workflows/run_bot_on_tournament.yaml
       - .github/workflows/run_bot_on_metaculus_cup.yaml
+      - .github/workflows/test_bot.yaml
+      - .github/workflows/check_bot_credentials.yaml
       - .github/workflows/validate_protocol.yaml
   workflow_dispatch:
 

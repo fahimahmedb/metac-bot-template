@@ -701,6 +701,7 @@ if __name__ == "__main__":
     )
 
     parser = argparse.ArgumentParser(description="Run the template forecasting bot")
+    parser.add_argument("--dry-run", action="store_true", help="Generate reports without publishing forecasts")
     parser.add_argument(
         "--mode",
         type=str,
@@ -712,7 +713,7 @@ if __name__ == "__main__":
     run_mode: Literal["tournament", "metaculus_cup", "test_questions"] = args.mode
 
     check_environment(strict=True)
-    publish_to_metaculus = True
+    publish_to_metaculus = not args.dry_run
     print_startup_banner(run_mode, will_publish=publish_to_metaculus)
 
     # Configure the bot. The `llms=` block below is commented out to use

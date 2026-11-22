@@ -14,7 +14,7 @@ concurrency:
 # Daily job to run the simple forecast bot
 jobs:
   forecast_job:
-    # Deliberately skip all official tournament runs until the owner explicitly opts in.
+    # Block official runs until an explicit repository owner opt-in.
     if: ${{ vars.FUTUREEVAL_LIVE_ENABLED == 'true' }}
     runs-on: ubuntu-latest # determines the machine that will run the job - keep as is
     steps: # sets up the steps that will be run in order

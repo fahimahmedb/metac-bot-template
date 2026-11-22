@@ -27,12 +27,14 @@ activates it. Merely creating GitHub Actions secrets must **not** start sending
 untested forecasts automatically.
 
 1. Add `METACULUS_TOKEN` and at least one LLM provider key as repository **secrets**.
-2. Run the manual **Check bot credentials (no forecast)** workflow on the
-   intended branch. It checks only that the required secrets exist; it neither
-   calls the LLM nor sends predictions. A green result is not an API connection test.
-3. In **Actions → Test Bot → Run workflow**, select the intended development
-   branch and verify a prediction actually reaches the **bot-testing-area**,
-   using the bot account to inspect the post and the Actions logs for errors.
+2. Before merging, use the **existing** `Actions → Test Bot → Run workflow`
+   workflow, selecting the intended development branch. It now checks the
+   presence of required credentials *before* attempting a sandbox prediction.
+3. Verify a prediction actually reaches the **bot-testing-area** using the
+   bot account, and inspect the Actions logs for failures. The separate manual
+   **Check bot credentials (no forecast)** workflow can be selected after its
+   definition is available on the default branch; it checks only key presence,
+   not actual LLM/API connectivity.
 4. Only after this end-to-end check, merge the approved change and create
    a repository **variable** (not secret) at
    **Settings → Secrets and variables → Actions → Variables** named

@@ -4,6 +4,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Literal
 from forecasting_protocol import RESEARCH_EVIDENCE_PROTOCOL, FORECAST_DECISION_PROTOCOL
+from publication_guard import require_publication_authorization
 
 import dotenv
 
@@ -714,6 +715,7 @@ if __name__ == "__main__":
 
     check_environment(strict=True)
     publish_to_metaculus = not args.dry_run
+    require_publication_authorization(run_mode, publish_to_metaculus)
     print_startup_banner(run_mode, will_publish=publish_to_metaculus)
 
     # Configure the bot. The `llms=` block below is commented out to use

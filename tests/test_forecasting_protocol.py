@@ -59,6 +59,14 @@ class PublicationGuardTests(unittest.TestCase):
                 self.assertIn("if: ${{ vars.FUTUREEVAL_LIVE_ENABLED == 'true' }}", content)
                 self.assertIn("FUTUREEVAL_LIVE_ENABLED: ${{ vars.FUTUREEVAL_LIVE_ENABLED }}", content)
 
+    def test_sandbox_checks_credentials_before_submitting(self):
+        root = Path(__file__).resolve().parents[1]
+        content = root.joinpath(".github/workflows/test_bot.yaml").read_text()
+        self.assertLess(
+            content.index("from bot_helpers import check_environment"),
+            content.index("uv run python main.py --mode test_questions"),
+        )
+
     def test_main_calls_guard_before_banner(self):
         main = Path(__file__).resolve().parents[1].joinpath("main.py").read_text()
         self.assertLess(

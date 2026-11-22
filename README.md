@@ -20,6 +20,47 @@ This tutorial shows you how to set up our template bot so you can start forecast
 If you run into trouble, reach out to `ben [at] metaculus [.com]`
 
 
+## Fork-specific safety: enable live publishing explicitly
+
+Once this PR is merged, this fork blocks official tournament publishing until the owner
+activates it. Merely creating GitHub Actions secrets must **not** start sending
+untested forecasts automatically.
+
+1. Add `METACULUS_TOKEN` and at least one LLM provider key as repository **secrets**.
+2. Before merging, use the **existing** `Actions → Test Bot → Run workflow`
+   workflow, selecting the intended development branch. It now checks the
+   presence of required credentials *before* attempting a sandbox prediction.
+3. Verify a prediction actually reaches the **bot-testing-area** using the
+   bot account, and inspect the Actions logs for failures. The separate manual
+   **Check bot credentials (no forecast)** workflow can be selected after its
+   definition is available on the default branch; it checks only key presence,
+   not actual LLM/API connectivity.
+4. Only after this end-to-end check, merge the approved change and create
+   a repository **variable** (not secret) at
+   **Settings → Secrets and variables → Actions → Variables** named
+   `FUTUREEVAL_LIVE_ENABLED` with the exact value `true`.
+5. The scheduled tournament and Metaculus Cup workflows have an independent
+   job-level guard, and `main.py` separately refuses live publication when
+   the variable is not exactly `true`.
+
+To revoke live publishing, set the variable to `false` or delete it. To
+produce research reports without posting forecasts, run
+`uv run python main.py --mode tournament --dry-run` with valid read credentials.
+
+**One-shot sandbox validation:** The feature branch contains
+`.github/workflows/sandbox_proof.yaml`. It runs a credential-presence check
+and then forecasts only on the `bot-testing-area`, never on the scored
+FutureEval tournament. A developer must explicitly run it via
+`workflow_dispatch` or commit a message containing
+`[futureeval-sandbox]` on the feature branch. Ordinary pushes will skip the
+sandbox job. If keys are absent it fails without submitting any forecasts.
+A successful GitHub job must still be corroborated with a forecast visible
+under the bot account.
+
+**Evidence limits:** GitHub workflow/unit-test success is not a valid
+Metaculus end-to-end proof. No LLM/API ability, competitive advantage,
+calibration or production activation should be inferred from offline CI.
+
 ## Quick start -> Fork and use Github Actions
 The easiest way to use this repo is to fork it, paste in two API keys, and click "Run workflow". After that, the bot will keep forecasting on new questions automatically every 20 minutes — no local setup needed.
 

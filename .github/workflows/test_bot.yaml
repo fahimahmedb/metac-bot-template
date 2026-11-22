@@ -28,6 +28,8 @@ jobs:
         run: uv sync --locked
       - name: Run bot
         run: |
+          # Fail fast if API credentials are missing; this alone does not verify live API access.
+          uv run python -c "from bot_helpers import check_environment; check_environment(strict=True)"
           uv run python main.py --mode test_questions
         # this reads the environment variables from the github repository.
         # Store under Settings --> Secrets and variables --> Actions

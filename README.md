@@ -47,6 +47,16 @@ To revoke live publishing, set the variable to `false` or delete it. To
 produce research reports without posting forecasts, run
 `uv run python main.py --mode tournament --dry-run` with valid read credentials.
 
+**One-shot sandbox validation:** The feature branch contains
+`.github/workflows/sandbox_proof.yaml`. It runs a credential-presence check
+and then forecasts only on the `bot-testing-area`, never on the scored
+FutureEval tournament. A developer must explicitly run it via
+`workflow_dispatch` or commit a message containing
+`[futureeval-sandbox]` on the feature branch. Ordinary pushes will skip the
+sandbox job. If keys are absent it fails without submitting any forecasts.
+A successful GitHub job must still be corroborated with a forecast visible
+under the bot account.
+
 **Evidence limits:** GitHub workflow/unit-test success is not a valid
 Metaculus end-to-end proof. No LLM/API ability, competitive advantage,
 calibration or production activation should be inferred from offline CI.

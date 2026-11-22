@@ -3,6 +3,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 from typing import Literal
+from forecasting_protocol import RESEARCH_EVIDENCE_PROTOCOL, FORECAST_DECISION_PROTOCOL
 
 import dotenv
 
@@ -177,6 +178,8 @@ class FallTemplateBot2026(ForecastBot):
             To be a great assistant, you generate a concise but detailed rundown of the most relevant news, including if the question would resolve Yes or No based on current information.
             You do not produce forecasts yourself.
 
+            {RESEARCH_EVIDENCE_PROTOCOL}
+
             Question:
             {question.question_text}
 
@@ -214,6 +217,8 @@ class FallTemplateBot2026(ForecastBot):
             {research}
 
             Today is {datetime.now().strftime("%Y-%m-%d")}.
+
+            {FORECAST_DECISION_PROTOCOL}
 
             Before answering you write:
             (a) The time left until the outcome to the question is known.
@@ -284,6 +289,8 @@ class FallTemplateBot2026(ForecastBot):
             {research}
 
             Today is {datetime.now().strftime("%Y-%m-%d")}.
+
+            {FORECAST_DECISION_PROTOCOL}
 
             Before answering you write:
             (a) The time left until the outcome to the question is known.
@@ -362,6 +369,8 @@ class FallTemplateBot2026(ForecastBot):
             {research}
 
             Today is {datetime.now().strftime("%Y-%m-%d")}.
+
+            {FORECAST_DECISION_PROTOCOL}
 
             {lower_bound_message}
             {upper_bound_message}
@@ -456,6 +465,8 @@ class FallTemplateBot2026(ForecastBot):
             {research}
 
             Today is {datetime.now().strftime("%Y-%m-%d")}.
+
+            {FORECAST_DECISION_PROTOCOL}
 
             {lower_bound_message}
             {upper_bound_message}

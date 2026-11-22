@@ -20,6 +20,32 @@ This tutorial shows you how to set up our template bot so you can start forecast
 If you run into trouble, reach out to `ben [at] metaculus [.com]`
 
 
+## Fork-specific safety: enable live publishing explicitly
+
+This fork intentionally blocks official tournament publishing until the owner
+activates it. Merely creating GitHub Actions secrets must **not** start sending
+untested forecasts automatically.
+
+1. Add `METACULUS_TOKEN` and at least one LLM provider key as repository **secrets**.
+2. In **Actions → Test Bot → Run workflow**, select the intended development
+   branch and verify a prediction actually reaches the **bot-testing-area**,
+   using the bot account to inspect the post and the Actions logs for errors.
+3. Only after this end-to-end check, merge the approved change and create
+   a repository **variable** (not secret) at
+   **Settings → Secrets and variables → Actions → Variables** named
+   `FUTUREEVAL_LIVE_ENABLED` with the exact value `true`.
+4. The scheduled tournament and Metaculus Cup workflows have an independent
+   job-level guard, and `main.py` separately refuses live publication when
+   the variable is not exactly `true`.
+
+To revoke live publishing, set the variable to `false` or delete it. To
+produce research reports without posting forecasts, run
+`uv run python main.py --mode tournament --dry-run` with valid read credentials.
+
+**Evidence limits:** GitHub workflow/unit-test success is not a valid
+Metaculus end-to-end proof. No LLM/API ability, competitive advantage,
+calibration or production activation should be inferred from offline CI.
+
 ## Quick start -> Fork and use Github Actions
 The easiest way to use this repo is to fork it, paste in two API keys, and click "Run workflow". After that, the bot will keep forecasting on new questions automatically every 20 minutes — no local setup needed.
 

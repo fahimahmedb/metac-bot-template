@@ -1,0 +1,45 @@
+name: Historical blind calibration (research only)
+
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths:
+      - "research/**"
+      - ".github/workflows/historical_calibration.yaml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: historical-calibration-research
+  cancel-in-progress: false
+
+jobs:
+  historical:
+    if: contains(github.event.head_commit.message, '[historical-calibration]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Syntax and temporal-leakage guard tests
+        run: |
+          python -m compileall -q research
+          python -m unittest discover -s research -p "test_historical_calibration.py" -v
+      - name: Retrieve published archived forecasts
+        run: |
+          curl --fail --location --retry 2 --max-time 300 --max-filesize 300000000 \
+            "https://www.forecastbench.org/assets/data/processed-forecast-sets/processed_forecast_sets.tar.gz" \
+            -o /tmp/forecastbench-processed.tar.gz
+          sha256sum /tmp/forecastbench-processed.tar.gz
+      - name: Train, validate and evaluate on held-out resolved historical events
+        run: python research/historical_calibration.py /tmp/forecastbench-processed.tar.gz
+      - name: Save complete aggregate results (no per-question outcome dump)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: historical-calibration-report
+          path: historical_calibration_report.json
+          if-no-files-found: ignore

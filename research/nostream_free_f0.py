@@ -1,5 +1,5 @@
 """F0 one-shot zero-credit qualification; upstream engine, reduced research, no publication."""
-import asyncio, hashlib, json, math, os, threading, time, urllib.request, urllib.error
+import asyncio, hashlib, json, math, os, re, threading, time, urllib.request, urllib.error
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal
@@ -29,6 +29,8 @@ catalog={}
 quota_start=None
 quota_day=None
 quota_reserve=10
+ROUTED=os.environ.get("NOSTREAM_FREE_ROUTING")=="true"
+free_routes={}
 
 KEY=os.environ["OPENROUTER_API_KEY"]
 BASE="https://openrouter.ai/api/v1"
@@ -95,6 +97,32 @@ def verify_catalog():
             raise StopBudget("missing or nonzero free catalog pricing: "+model)
     print("FREE_CONFIG="+json.dumps({"candidate":CANDIDATE,"roster":ROSTER,"utility":UTILITY,"max_attempts":MAX_ATTEMPTS,"forecast_cap":CAP,"pricing":{m:catalog[m]["pricing"] for m in sorted(ALLOW)}}),flush=True)
 
+def zero_routes(data,model):
+    # Exact free-variant response only; never take the paid sibling as evidence.
+    if data.get("id")!=model or not model.endswith(":free"):
+        raise StopBudget("endpoint variant not verified")
+    safe=set()
+    for e in data.get("endpoints",[]):
+        pricing=e.get("pricing",{})
+        if not isinstance(pricing,dict) or not all(k in pricing for k in ("prompt","completion")):continue
+        try:
+            if any(Decimal(str(v))!=0 for v in pricing.values()):continue
+        except Exception:continue
+        # tag is the endpoint's provider slug, not display name. Require it explicitly.
+        slug=e.get("tag") or e.get("provider_slug")
+        if not isinstance(slug,str) or not re.fullmatch(r"[a-z0-9][a-z0-9._/-]{0,100}",slug):continue
+        safe.add(slug)
+    if not safe:raise StopBudget("no verified zero-price endpoints: "+model)
+    return sorted(safe)
+
+def discover_routes():
+    for model in sorted(ALLOW):
+        path="/models/"+model+"/endpoints"
+        data=request(BASE+path,auth=True)["data"]
+        free_routes[model]=zero_routes(data,model)
+        print("FREE_ENDPOINTS="+json.dumps({"model":model,"only":free_routes[model]}),flush=True)
+    (OUT/"routes.json").write_text(json.dumps(free_routes,sort_keys=True))
+
 def payload_for(model,prompt):
     if model not in ALLOW or not model.endswith(":free") or not isinstance(prompt,str):
         raise StopBudget("unapproved route")
@@ -103,9 +131,13 @@ def payload_for(model,prompt):
     limit=catalog.get(model,{}).get("top_provider",{}).get("max_completion_tokens")
     if limit is not None:cap=min(cap,int(limit))
     if cap<=0:raise StopBudget("invalid completion cap")
+    provider={"allow_fallbacks":False,"require_parameters":True,"max_price":{"prompt":0,"completion":0,"request":0,"image":0}}
+    if ROUTED:
+        routes=free_routes.get(model)
+        if not routes:raise StopBudget("missing verified route list")
+        provider.update({"only":routes,"allow_fallbacks":len(routes)>1})
     return {"model":model,"messages":[{"role":"user","content":prompt}],"max_tokens":cap,"stream":False,
-        "provider":{"allow_fallbacks":False,"require_parameters":True,"max_price":{"prompt":0,"completion":0,"request":0,"image":0}},
-        "usage":{"include":True}}
+        "provider":provider,"usage":{"include":True}}
 
 def http_diagnostics(exc):
     # Never persist raw provider messages, bodies, or sensitive headers.
@@ -147,6 +179,7 @@ def invoke_sync(model, prompt):
         attempted.append(model)
         rec={"model":model,"attempt":len(attempted),"max_tokens":payload["max_tokens"],"prompt_sha256":hashlib.sha256(prompt.encode()).hexdigest()}
         rec["quota_before"]=quota
+        if ROUTED:rec["allowed_providers"]=payload["provider"]["only"]
         rec["issued_at"]=datetime.now(timezone.utc).isoformat()
         ledger.append(rec)
         emit()
@@ -156,7 +189,7 @@ def invoke_sync(model, prompt):
             choice=body["choices"][0];usage=body.get("usage",{})
             content=choice["message"].get("content") or ""
             rec.update({"returned_model":body.get("model"),"id":body.get("id"),"finish":choice.get("finish_reason"),
-                "cost":usage.get("cost"),"prompt_tokens":usage.get("prompt_tokens"),"completion_tokens":usage.get("completion_tokens"),
+                "provider":body.get("provider"),"cost":usage.get("cost"),"prompt_tokens":usage.get("prompt_tokens"),"completion_tokens":usage.get("completion_tokens"),
                 "seconds":round(time.monotonic()-start,2),"response_sha256":hashlib.sha256(content.encode()).hexdigest()})
             if usage.get("cost") is None or Decimal(str(usage["cost"]))!=0:
                 stopped=True
@@ -211,6 +244,7 @@ async def main():
     if quota_start["remaining"]<MAX_ATTEMPTS+quota_reserve:
         raise StopBudget("insufficient free requests for bounded run plus reserve")
     verify_catalog()
+    if ROUTED:discover_routes()
     q=BinaryQuestion(question_text="Will US CPI-U inflation for December 2026 be at least 3.0% year over year?",
       id_of_question=990002,id_of_post=990002,background_info="BLS all-items CPI-U US city average not seasonally adjusted.",
       resolution_criteria="YES if first BLS release for December 2026 reports all-items 12-month inflation of at least 3.0%; otherwise NO. Source https://www.bls.gov/news.release/cpi.htm",

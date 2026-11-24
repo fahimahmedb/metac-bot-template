@@ -1,6 +1,6 @@
 """New-source holdout: archived market priors vs learned corrections.
 
-Kalshi and INFER only; prior tests used other market sources. No official
+Kalshi and INFER held out; older Metaculus/Manifold/Polymarket supply development. No official
 tournament use. ForecastBench CC BY-SA 4.0. Use archived as-of freeze prices,
 not current odds or later price history. Resolution time is an imperfect proxy.
 """
@@ -19,7 +19,8 @@ from second_holdout import ARCHIVE_SHA,DATA_REF
 from local_llm_replay import stable_hash
 from rolling_economic import metrics,bootstrap
 
-SOURCES={"kalshi","infer"}
+TEST_SOURCES={"kalshi","infer"}
+SOURCES=TEST_SOURCES|{"metaculus","manifold","polymarket"}
 START=date(2024,7,1)
 TEST_START=date(2026,7,1)
 TEST_END=date(2026,10,26)
@@ -27,7 +28,7 @@ FREEZE=date(2026,11,20)
 EMBARGO=timedelta(days=30)
 ORIGINS=[date(2025,11,1),date(2026,2,1),date(2026,5,1)]
 CAP=500
-FEATURES=("logit","abs_logit","horizon_log","infer")
+FEATURES=("logit","abs_logit","horizon_log")
 CANDIDATES=("market","half","shrink_10","shrink_25","extremize","temperature","affine","context_lr","context_blend")
 
 def parse_date(x):
@@ -104,14 +105,18 @@ def prepare(archive,out):
     rows=[];seen_text=set()
     for key,r in sorted(candidates.items(),key=lambda kv:(kv[1]["issued"],kv[0])):
         if len(labels.get(key,set()))!=1:continue
-        if not r["question"] or r["question"] in seen_text:continue
-        seen_text.add(r["question"])
+        text_key=(r["source"] in TEST_SOURCES,r["question"])
+        if not r["question"] or text_key in seen_text:continue
+        seen_text.add(text_key)
         resolved,y=next(iter(labels[key]))
         rows.append({k:v for k,v in r.items() if k!="question"}|{"resolved":resolved,"y":y})
     dev=[r for r in rows if parse_date(r["issued"])<TEST_START]
-    pool=[r for r in rows if TEST_START<=parse_date(r["first"])<=parse_date(r["issued"])<TEST_END]
+    pool=[r for r in rows if r["source"] in TEST_SOURCES and TEST_START<=parse_date(r["first"])<=parse_date(r["issued"])<TEST_END]
     # Hash-based sample, not labels; source coverage is reported.
     test=sorted(pool,key=lambda r:stable_hash("new-source-v1|"+r["key"]))[:CAP]
+    # Exact normalized-text duplicates of held-out questions must not enter development.
+    heldout_text={candidates[r["key"]]["question"] for r in test}
+    dev=[r for r in dev if candidates[r["key"]]["question"] not in heldout_text]
     out.mkdir(parents=True,exist_ok=True)
     if len(test)<40 or len(dev)<100:raise ValueError(f"Insufficient new source coverage dev={len(dev)} test={len(test)}")
     for name,obj in (("dev.json",dev),("inputs.json",[{k:v for k,v in r.items() if k not in {"y","resolved"}} for r in test]),

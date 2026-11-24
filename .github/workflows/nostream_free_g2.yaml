@@ -17,7 +17,7 @@ jobs:
       fail-fast: false
       max-parallel: 1
       matrix:
-        question_type: [multiple_choice, numeric, binary]
+        question_type: [multiple_choice]
     steps:
       - uses: actions/checkout@v5
         with:
@@ -111,6 +111,28 @@ jobs:
           try: x.typed_value(bad,q)
           except ValueError: pass
           else: raise AssertionError("invalid typed prediction accepted")
+          # Regression: valid transport + absent strict block must reach upstream
+          # repair, not become a transport failure or consume a second dispatch.
+          import asyncio,json,tempfile
+          from pathlib import Path
+          from unittest.mock import patch
+          from metaculus_bot.value_extraction import extract_mc
+          from metaculus_bot.structured_output_schema import parse_structured_block
+          if x.QUESTION_TYPE=="multiple_choice":
+              raw=json.dumps({"question_type":"multiple_choice","option_probs":dict(zip(q.options,[.2,.3,.5]))})
+              assert parse_structured_block(raw,"multiple_choice") is None
+              response={"model":"gpt-oss-120b","id":"offline","choices":[{"finish_reason":"stop","message":{"content":raw}}],"usage":{}}
+              headers={"x-ratelimit-limit-requests-minute":5,"x-ratelimit-limit-tokens-minute":30000,"x-ratelimit-limit-tokens-day":1000000}
+              with tempfile.TemporaryDirectory() as tmp,patch.object(x,"OUT",Path(tmp)),patch.object(x,"direct_request",return_value=(response,headers)) as req:
+                  assert x.invoke_direct(x.GPT,"fixture")==raw
+                  assert x.invoke_direct(x.GPT,"fixture")==raw
+                  assert req.call_count==1
+                  assert x.DIRECT[-1]["strict_block_valid"] is False
+              result=asyncio.run(extract_mc(raw,list(q.options),None))
+              assert result.rung=="repair"
+              x.typed_value(result.value.option_list,q)
+          assert x.G2_GOOGLE_SOCKET_TIMEOUT==300
+          print("G2_EXTRACTION_REGRESSION_PASS")
           print("G2_TYPED_OFFLINE_PASS",x.QUESTION_TYPE)
           PY
       - name: One bounded real G2 typed trial

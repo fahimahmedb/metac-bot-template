@@ -56,6 +56,34 @@ jobs:
               try: asyncio.run(x.main())
               except x.f.StopBudget: pass
               else: raise AssertionError("missing authorization gate")
+          import io
+          from urllib.error import HTTPError
+          def err(code,headers=None):
+              return HTTPError("https://generativelanguage.googleapis.com",code,"test",headers or {},io.BytesIO(b"{}"))
+          rec={}
+          with patch.object(x,"direct_request",side_effect=[err(503),err(503),({"ok":True},{})]) as req,patch.object(x.time,"sleep") as sleep:
+              assert x.bounded_direct_request(x.GEM,"same",rec)==({"ok":True},{})
+              assert req.call_count==3 and [a["http"] for a in rec["dispatches"]]==[503,503,200]
+              assert [a.args[0] for a in sleep.call_args_list]==[10,25]
+          for role,code,headers in ((x.GEM,429,{}),(x.GEM,403,{}),(x.GPT,503,{}),(x.UTIL,503,{}),(x.GEM,503,{"Retry-After":"120"})):
+              with patch.object(x,"direct_request",side_effect=err(code,headers)) as req,patch.object(x.time,"sleep") as sleep:
+                  try: x.bounded_direct_request(role,"same",{})
+                  except HTTPError: pass
+                  else: raise AssertionError("unexpected retry")
+                  assert req.call_count==1 and not sleep.called
+          with patch.object(x,"direct_request",side_effect=err(503)) as req,patch.object(x.time,"sleep"):
+              try: x.bounded_direct_request(x.GEM,"same",{})
+              except HTTPError: pass
+              else: raise AssertionError("retry cap failed")
+              assert req.call_count==3
+          import hashlib
+          with patch.dict(x.completed,{x.GEM:(hashlib.sha256(b"same").hexdigest(),"validated content")}),patch.object(x,"direct_request",side_effect=AssertionError("duplicate dispatch")) as req:
+              assert x.invoke_direct(x.GEM,"same")=="validated content"
+              try: x.invoke_direct(x.GEM,"different")
+              except x.f.StopBudget: pass
+              else: raise AssertionError("different prompt accepted")
+              assert req.call_count==0
+          print("F2_RETRY_GUARDS_PASS")
           print("F2_OFFLINE_PASS: exact roles, payload restrictions, model constructors and authorization gate")
           PY
       - name: One real F2 public-data integrated binary trial

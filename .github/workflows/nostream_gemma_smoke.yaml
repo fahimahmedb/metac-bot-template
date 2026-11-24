@@ -1,4 +1,4 @@
-name: No-Stream direct Gemma public-data smoke
+name: No-Stream direct Gemma 26B utility public-data smoke
 on:
   push:
     branches: [research/historical-blind-calibration]
@@ -27,7 +27,7 @@ jobs:
           class NoRedirect(urllib.request.HTTPRedirectHandler):
               def redirect_request(self,*args,**kwargs):return None
           opener=urllib.request.build_opener(NoRedirect)
-          model="gemma-4-31b-it"
+          model="gemma-4-26b-a4b-it"
           url="https://generativelanguage.googleapis.com/v1beta/models/"+model
           def request(suffix="",payload=None):
               h={"x-goog-api-key":key,"Accept":"application/json"}
@@ -41,7 +41,7 @@ jobs:
                   raise SystemExit("BLOCK: identity or generation capability unverified")
               prompt="Synthetic noncontest test. A fair six-sided die is rolled twice independently. YES if at least one roll is a six. Estimate probability with a short rationale, then append a fenced JSON block containing exactly question_type (binary) and posterior_prob (number between 0 and 1). Do not use tools."
               t=time.monotonic()
-              # One fresh attempt after the previous run's 503. No retries on any status.
+              # Separate existing utility model availability probe; not F1 roster qualification. No retries.
               payload={"contents":[{"role":"user","parts":[{"text":prompt}]}],"generationConfig":{"maxOutputTokens":4096,"candidateCount":1}}
               body=request(":generateContent",payload)
               choice=body["candidates"][0]

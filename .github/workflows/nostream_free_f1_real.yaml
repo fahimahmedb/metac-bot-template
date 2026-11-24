@@ -1,0 +1,152 @@
+name: No-Stream F1 quota-aware real qualification
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/nostream_free_f1_real.yaml']
+permissions:
+  contents: read
+concurrency:
+  group: nostream-free-f0-once
+  cancel-in-progress: false
+jobs:
+  real:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 22
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v5
+        with:
+          repository: No-Stream/nostreambot-metaculus-bot
+          ref: 79c1d7a1192a00724646ab05c67f3b776d2d7b65
+          path: upstream
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
+          python-version: '3.12'
+      - name: Install locked dependencies
+        working-directory: upstream
+        run: uv sync --dev --frozen
+      - name: Prepare pinned safe runner
+        run: |
+          test "$(git -C upstream rev-parse HEAD)" = "79c1d7a1192a00724646ab05c67f3b776d2d7b65"
+          cp research/nostream_runner.py research/nostream_free_f0.py upstream/
+          cd upstream
+          uv run --frozen python -m py_compile nostream_free_f0.py
+      - name: Offline safety regression checks (no real key)
+        working-directory: upstream
+        env:
+          OPENROUTER_API_KEY: dummy-offline
+          NOSTREAM_FREE_CANDIDATE: F1
+        run: |
+          uv run --frozen python - <<'PY'
+          from unittest.mock import patch
+          import nostream_free_f0 as f
+          with patch.object(f, "request", side_effect=AssertionError("network forbidden")):
+              for m in f.ALLOW:
+                  p=f.payload_for(m,"test")
+                  assert p["model"].endswith(":free")
+                  assert not p["provider"]["allow_fallbacks"]
+                  assert all(v==0 for v in p["provider"]["max_price"].values())
+                  assert not any(k in p for k in ("models","tools","plugins"))
+              for m in ("openai/gpt-6.1-sol","openrouter/free","nvidia/other:free"):
+                  try: f.invoke_sync(m,"test")
+                  except f.StopBudget: pass
+                  else: raise AssertionError("unapproved route")
+              f.stopped=True
+              try: f.invoke_sync(f.ROSTER[0],"test")
+              except f.StopBudget: pass
+              else: raise AssertionError("stop not enforced")
+              assert not f.ledger
+          import io, json
+          from datetime import datetime, timezone
+          from urllib.error import HTTPError
+          def quota(used=3,limit=50,remaining=47):
+              return {"usage":0,"free_model_daily_requests":{"used":used,"limit":limit,"remaining":remaining}}
+          with patch.object(f,"request",return_value={"data":dict(quota(),label="secret-not-logged")}):
+              assert f.get_meta("/key")==quota()
+          assert f.verified_quota(quota())==quota()["free_model_daily_requests"]
+          for bad in ({},quota(3,50,46),quota(True,50,49),quota(-1,50,51)):
+              try: f.verified_quota(bad)
+              except f.StopBudget: pass
+              else: raise AssertionError("invalid counter accepted")
+          def err(meta,headers=None):
+              return HTTPError("https://openrouter.ai/api/v1/chat/completions",429,"limited",headers or {},io.BytesIO(json.dumps({"error":{"message":"private","metadata":meta}}).encode()))
+          d=f.http_diagnostics(err({"provider_code":"raw-private-code"}))
+          assert d["provider_code_present"] and "raw-private-code" not in str(d)
+          assert f.provider_only_429(d)
+          assert f.provider_only_429(f.http_diagnostics(err({"limit_source":"upstream_provider_shared_pool"})))
+          for x in (err({}),err({"provider_code":"429"},{"X-RateLimit-Remaining":"0"}),err({"provider_code":"429"},{"Retry-After":"60"}),err({"limit_source":"openrouter_free_tier_per_day","provider_code":"429"})):
+              assert not f.provider_only_429(f.http_diagnostics(x))
+          def reset():
+              f.stopped=False;f.attempted.clear();f.ledger.clear()
+              f.quota_start=f.verified_quota(quota())
+              f.quota_day=datetime.now(timezone.utc).date().isoformat()
+          reset()
+          with patch.object(f,"get_meta",return_value=quota(40,50,10)),patch.object(f,"request",side_effect=AssertionError("must not dispatch")) as r:
+              try: f.invoke_sync(f.ROSTER[0],"test")
+              except f.StopBudget: pass
+              else: raise AssertionError("reserve violated")
+              assert f.stopped and not f.attempted and r.call_count==0
+          reset()
+          with patch.object(f,"get_meta",return_value=quota()),patch.object(f,"request",side_effect=err({"provider_code":"429"})):
+              try: f.invoke_sync(f.ROSTER[0],"test")
+              except RuntimeError: pass
+              else: raise AssertionError("expected 429")
+              assert not f.stopped and len(f.attempted)==1
+          with patch.object(f,"get_meta",return_value=quota(4,50,46)),patch.object(f,"request",side_effect=err({"limit_source":"openrouter_free_tier_per_day"},{"X-RateLimit-Remaining":"0"})):
+              try: f.invoke_sync(f.ROSTER[1],"test")
+              except RuntimeError: pass
+              else: raise AssertionError("expected 429")
+              assert f.stopped and len(f.attempted)==2
+          with patch.object(f,"request",side_effect=AssertionError("must not dispatch")) as r:
+              try: f.invoke_sync(f.ROSTER[2],"test")
+              except f.StopBudget: pass
+              else: raise AssertionError("global stop failed")
+              assert r.call_count==0
+          reset()
+          with patch.object(f,"get_meta",return_value=quota(39,50,11)):
+              f.quota_start=f.verified_quota(quota(39,50,11))
+              f.attempted.append(f.ROSTER[0])
+              try: f.check_quota()
+              except f.StopBudget: pass
+              else: raise AssertionError("local count reserve failed")
+          print("F1_QUOTA_GUARDS_PASS: actual field extraction; invalid/absent counter, reserve, lag, provider/global 429, no paid routes, no network")
+          PY
+      - name: One F1 real test with own free credentials only
+        working-directory: upstream
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          NOSTREAM_FREE_CANDIDATE: F1
+          NOSTREAM_F1_INFERENCE_AUTHORIZED: 'true'
+          ASKNEWS_CLIENT_ID: ${{ secrets.ASKNEWS_CLIENT_ID }}
+          ASKNEWS_SECRET: ${{ secrets.ASKNEWS_SECRET }}
+          NATIVE_SEARCH_ENABLED: 'false'
+          FINANCIAL_DATA_ENABLED: 'false'
+          GEMINI_SEARCH_ENABLED: 'false'
+          GAP_FILL_ENABLED: 'false'
+          GAP_FILL_V2_ENABLED: 'false'
+          PREDICTION_MARKETS_ENABLED: 'false'
+          RESOLUTION_SOURCE_ENABLED: 'false'
+          RESOLUTION_SOURCE_URL_CONTEXT_ENABLED: 'false'
+          TS_ANCHOR_ENABLED: 'false'
+          TS_ANCHOR_CHART_ENABLED: 'false'
+          PROBABILISTIC_TOOLS_ENABLED: 'false'
+          BINARY_STACKING_ENABLED: 'false'
+          MC_STACKING_ENABLED: 'false'
+          NUMERIC_STACKING_ENABLED: 'false'
+          PERSIST_RESEARCH_ENABLED: 'false'
+          RAW_RESEARCH_LOG_ENABLED: 'false'
+        run: uv run --frozen python nostream_free_f0.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nostream-free-f1-evidence
+          path: |
+            upstream/free-results/ledger.json
+            upstream/free-results/summary.json
+            upstream/free-results/evidence.sha256
+          if-no-files-found: warn

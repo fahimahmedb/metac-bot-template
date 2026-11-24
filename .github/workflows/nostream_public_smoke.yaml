@@ -1,0 +1,109 @@
+name: No-Stream public API smoke (zero cost)
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/nostream_public_smoke.yaml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: No-Stream/nostreambot-metaculus-bot
+          ref: 79c1d7a1192a00724646ab05c67f3b776d2d7b65
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
+          python-version: '3.12'
+      - name: Install locked dependencies
+        run: uv sync --dev --frozen
+      - name: Run real bounded anonymous inference on public evidence
+        run: |
+          test "$(git rev-parse HEAD)" = "79c1d7a1192a00724646ab05c67f3b776d2d7b65"
+          mkdir -p public-smoke
+          cat > public_smoke.py <<'PY'
+          import json, hashlib, math, time, urllib.request, urllib.error
+          from pathlib import Path
+          from datetime import datetime, timedelta, timezone
+          from concurrent.futures import ThreadPoolExecutor
+          from forecasting_tools import BinaryQuestion
+          from metaculus_bot.prompts import binary_prompt
+          from metaculus_bot.structured_output_schema import BinaryStructured, parse_structured_block
+          from metaculus_bot.aggregation_strategies import aggregate_binary_median
+          out=Path("public-smoke")
+          now=datetime.now(timezone.utc)
+          def request(url, payload=None, headers=None, timeout=30):
+              hdr={"User-Agent":"NoStream-public-smoke/1.0", "Accept":"application/json"}
+              hdr.update(headers or {})
+              data=None if payload is None else json.dumps(payload).encode()
+              if data is not None: hdr["Content-Type"]="application/json"
+              req=urllib.request.Request(url, data=data, headers=hdr)
+              with urllib.request.urlopen(req, timeout=timeout) as response:
+                  return json.loads(response.read(8_000_000))
+          # Public v1 BLS API, explicitly permits anonymous access.
+          src="https://api.bls.gov/publicAPI/v1/timeseries/data/CUUR0000SA0"
+          evidence=request(src)
+          rows=evidence["Results"]["series"][0]["data"]
+          # Never pass target-period data to inference.
+          rows=[x for x in rows if (int(x["year"]),x["period"]) < (2026,"M12") and x["period"]!="M13"]
+          assert len(rows)>=12
+          research="BLS CPI-U all items, US city average, not seasonally adjusted, index values. Retrieved "+now.isoformat()+" from "+src+"\n"+json.dumps(rows[:24])
+          (out/"evidence.json").write_text(json.dumps(rows,sort_keys=True))
+          q=BinaryQuestion(question_text="Will US CPI-U inflation for December 2026 be at least 3.0% year over year?",
+            id_of_question=990002,id_of_post=990002,
+            background_info="Use the all-items CPI-U US city average, not seasonally adjusted.",
+            resolution_criteria="YES if the first BLS release for December 2026 reports 12-month all-items CPI-U inflation of at least 3.0 percent. Otherwise NO. Source: https://www.bls.gov/news.release/cpi.htm",
+            fine_print="First release; no contest submission.",
+            open_time=now-timedelta(days=1),scheduled_resolution_time=datetime(2027,2,1,tzinfo=timezone.utc))
+          assert now<datetime(2026,12,1,tzinfo=timezone.utc)
+          prompt=binary_prompt(q,research)
+          (out/"prompt.txt").write_text(prompt)
+          base="https://ai-gateway.kilo.ai/api/v1"
+          catalog=request(base+"/models")
+          # Kilo explicitly allows anonymous calls for free models. No credentials,
+          # no paid route, no substitution with non-free IDs.
+          free=sorted({m["id"] for m in catalog["data"] if m.get("id","").endswith(":free")})
+          selected=[]
+          vendors=set()
+          for model in free:
+              vendor=model.split("/")[0]
+              if vendor not in vendors:
+                  selected.append(model);vendors.add(vendor)
+              if len(selected)==3:break
+          (out/"catalog.json").write_text(json.dumps({"free":free,"selected":selected}))
+          print("FREE_CATALOG",json.dumps(free),flush=True)
+          def infer(model):
+              started=time.monotonic()
+              try:
+                  body=request(base+"/chat/completions",{"model":model,"messages":[{"role":"user","content":prompt}],"max_tokens":4096,"stream":False},timeout=100)
+                  text=body["choices"][0]["message"].get("content") or ""
+                  parsed=parse_structured_block(text,"binary")
+                  p=parsed.posterior_prob if isinstance(parsed,BinaryStructured) else None
+                  return {"requested":model,"returned":body.get("model"),"id":body.get("id"),"usage":body.get("usage"),"seconds":round(time.monotonic()-started,2),"probability":p,"response":text,"finish_reason":body["choices"][0].get("finish_reason")}
+              except urllib.error.HTTPError as exc:
+                  return {"requested":model,"http_error":exc.code}
+              except Exception as exc:
+                  return {"requested":model,"error_type":type(exc).__name__}
+          with ThreadPoolExecutor(max_workers=3) as pool:
+              records=list(pool.map(infer,selected))
+          (out/"responses.json").write_text(json.dumps(records,sort_keys=True))
+          valid=[r["probability"] for r in records if isinstance(r.get("probability"),(int,float)) and math.isfinite(r["probability"]) and 0<=r["probability"]<=1]
+          summary={"scope":"real public-data and LLM transport, original binary prompt/parser/median; alternative models; NOT full upstream research orchestration or predictive validation","models_attempted":len(selected),"models_valid":len(valid),"median":aggregate_binary_median(valid) if len(valid)==3 else None,"responses":[{k:v for k,v in r.items() if k!="response"} for r in records],"provider_billable_calls":0,"published":0,"issued_at":now.isoformat()}
+          payload=json.dumps(summary,sort_keys=True)
+          (out/"summary.json").write_text(payload)
+          print("PUBLIC_SMOKE_RESULT",payload,flush=True)
+          print("PUBLIC_SMOKE_SHA256",hashlib.sha256(payload.encode()).hexdigest(),flush=True)
+          if len(valid)!=3: raise SystemExit("BLOCK: three valid anonymous model outputs not obtained")
+          PY
+          uv run --frozen python public_smoke.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nostream-public-api-smoke
+          path: public-smoke/
+          if-no-files-found: warn

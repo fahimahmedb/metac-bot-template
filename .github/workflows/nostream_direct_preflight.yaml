@@ -1,0 +1,28 @@
+name: No-Stream independent free API availability
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/nostream_direct_preflight.yaml']
+permissions:
+  contents: read
+jobs:
+  credentials:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Check named credentials without disclosing them or invoking providers
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          BAIDU_API_KEY: ${{ secrets.BAIDU_API_KEY }}
+          QIANFAN_API_KEY: ${{ secrets.QIANFAN_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+          CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+        run: |
+          python3 -I - <<'PY'
+          import os,json
+          names=("GEMINI_API_KEY","GOOGLE_API_KEY","BAIDU_API_KEY","QIANFAN_API_KEY","GROQ_API_KEY","CEREBRAS_API_KEY","NVIDIA_API_KEY")
+          print("DIRECT_CREDENTIAL_PRESENCE="+json.dumps({n:bool(os.getenv(n)) for n in names},sort_keys=True))
+          PY

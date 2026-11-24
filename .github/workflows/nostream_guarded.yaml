@@ -1,0 +1,46 @@
+name: No-Stream guarded integration
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths:
+      - 'research/nostream_runner.py'
+      - 'research/test_nostream_runner.py'
+      - '.github/workflows/nostream_guarded.yaml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  guarded_offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v5
+        with:
+          repository: No-Stream/nostreambot-metaculus-bot
+          ref: 79c1d7a1192a00724646ab05c67f3b776d2d7b65
+          path: upstream
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
+          python-version: "3.12"
+      - name: Install exact locked upstream dependencies
+        working-directory: upstream
+        run: uv sync --dev --frozen
+      - name: Verify revision and qualify local integration
+        run: |
+          test "$(git -C upstream rev-parse HEAD)" = "79c1d7a1192a00724646ab05c67f3b776d2d7b65"
+          cp research/nostream_runner.py upstream/nostream_runner.py
+          cp research/test_nostream_runner.py upstream/tests/test_nostream_runner.py
+          cd upstream
+          uv run --frozen python nostream_runner.py
+          uv run --frozen pytest -q tests/test_nostream_runner.py --junitxml=guarded-integration.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nostream-guarded-integration
+          path: upstream/guarded-integration.xml
+          if-no-files-found: warn

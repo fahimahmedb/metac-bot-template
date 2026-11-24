@@ -1,0 +1,68 @@
+name: Paired economic baselines (research only)
+
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths:
+      - "research/economic_baseline.py"
+      - "research/test_economic_baseline.py"
+      - ".github/workflows/economic_baseline.yaml"
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  prediction:
+    if: contains(github.event.head_commit.message, '[economic-baseline]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Run research tests
+        run: python -m unittest discover -s research -p "test_*.py" -v
+      - uses: actions/download-artifact@v4
+        with:
+          name: replay-inputs
+          run-id: 45294059131
+          github-token: ${{ github.token }}
+          path: /tmp/economic
+      - name: Produce predictions using only snapshot histories
+        run: |
+          test ! -f /tmp/economic/labels.json
+          python research/economic_baseline.py predict /tmp/economic/inputs.json /tmp/economic/pred.json
+          test ! -f /tmp/economic/labels.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: economic-frozen-predictions
+          path: /tmp/economic/pred.json
+          if-no-files-found: error
+  score:
+    needs: prediction
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/download-artifact@v4
+        with:
+          name: economic-frozen-predictions
+          path: /tmp/economic
+      - uses: actions/download-artifact@v4
+        with:
+          name: replay-sealed-labels
+          run-id: 45294059131
+          github-token: ${{ github.token }}
+          path: /tmp/economic
+      - name: Score the already-frozen numerical predictions
+        run: python research/economic_baseline.py score /tmp/economic/pred.json /tmp/economic/labels.json /tmp/economic/report.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: economic-baseline-report
+          path: /tmp/economic/report.json
+          if-no-files-found: error

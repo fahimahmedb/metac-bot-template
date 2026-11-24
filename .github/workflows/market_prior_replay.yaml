@@ -96,3 +96,5 @@ jobs:
           name: market-scoring-report
           path: /tmp/market/report.json
           if-no-files-found: error
+
+# Retry with expanded development coverage; new-source test remains sealed.

@@ -114,6 +114,24 @@ jobs:
               try: f.check_quota()
               except f.StopBudget: pass
               else: raise AssertionError("local count reserve failed")
+          # Real routing must keep exact free variant and reject every priced route.
+          model=f.ROSTER[2]
+          z={"prompt":"0","completion":"0","request":"0"}
+          data={"id":model,"endpoints":[{"tag":"free-a","pricing":z},{"tag":"free-b","pricing":z},{"tag":"paid-c","pricing":dict(z,completion="0.01")},{"tag":"missing-price","pricing":{}}]}
+          assert f.zero_routes(data,model)==["free-a","free-b"]
+          for bad in (dict(data,id=model.removesuffix(":free")),{"id":model,"endpoints":[{"tag":"paid","pricing":dict(z,prompt="1")}]}, {"id":model,"endpoints":[]}):
+              try: f.zero_routes(bad,model)
+              except f.StopBudget: pass
+              else: raise AssertionError("unsafe endpoint accepted")
+          with patch.object(f,"ROUTED",True),patch.object(f,"free_routes",{model:["free-a","free-b"]}):
+              p=f.payload_for(model,"test")
+              assert p["model"]==model and p["provider"]["only"]==["free-a","free-b"]
+              assert p["provider"]["allow_fallbacks"] and all(v==0 for v in p["provider"]["max_price"].values())
+              assert not any(k in p for k in ("models","tools","plugins"))
+              try: f.payload_for(f.ROSTER[0],"test")
+              except f.StopBudget: pass
+              else: raise AssertionError("unverified routing accepted")
+          print("F1_ROUTING_GUARDS_PASS")
           print("F1_QUOTA_GUARDS_PASS: actual field extraction; invalid/absent counter, reserve, lag, provider/global 429, no paid routes, no network")
           PY
       - name: One F1 real test with own free credentials only
@@ -122,6 +140,7 @@ jobs:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           NOSTREAM_FREE_CANDIDATE: F1
           NOSTREAM_F1_INFERENCE_AUTHORIZED: 'true'
+          NOSTREAM_FREE_ROUTING: 'true'
           ASKNEWS_CLIENT_ID: ${{ secrets.ASKNEWS_CLIENT_ID }}
           ASKNEWS_SECRET: ${{ secrets.ASKNEWS_SECRET }}
           NATIVE_SEARCH_ENABLED: 'false'
@@ -149,4 +168,5 @@ jobs:
             upstream/free-results/ledger.json
             upstream/free-results/summary.json
             upstream/free-results/evidence.sha256
+            upstream/free-results/routes.json
           if-no-files-found: warn

@@ -20,7 +20,7 @@ jobs:
           ref: 79c1d7a1192a00724646ab05c67f3b776d2d7b65
           path: upstream
           persist-credentials: false
-      - name: Verify pinned source and run free metadata preflight
+      - name: Verify pinned source and run free metadata and OAuth preflight
         env:
           METACULUS_TOKEN: ${{ secrets.METACULUS_TOKEN }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}

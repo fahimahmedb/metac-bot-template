@@ -14,7 +14,12 @@ from main import TemplateForecaster
 OUT=Path("free-results")
 OUT.mkdir(exist_ok=True)
 PIN="79c1d7a1192a00724646ab05c67f3b776d2d7b65"
-ROSTER=["nvidia/nemotron-3-ultra-550b-a55b:free","baidu/ernie-5.5-flash-preview:free","inclusionai/ling-3.2-flash:free"]
+CANDIDATE=os.environ.get("NOSTREAM_FREE_CANDIDATE","F0")
+ROSTERS={
+    "F0":["nvidia/nemotron-3-ultra-550b-a55b:free","baidu/ernie-5.5-flash-preview:free","inclusionai/ling-3.2-flash:free"],
+    "F1":["nvidia/nemotron-3-ultra-550b-a55b:free","baidu/ernie-5.5-flash-preview:free","google/gemma-4-31b-it:free"],
+}
+ROSTER=ROSTERS[CANDIDATE]
 UTILITY="google/gemma-4-26b-a4b-it:free"
 ALLOW=set(ROSTER+[UTILITY])
 CAP=24576
@@ -54,7 +59,7 @@ def verify_catalog():
         pricing=m.get("pricing",{})
         if not model.endswith(":free") or not all(k in pricing for k in ("prompt","completion")) or any(Decimal(str(v))!=0 for v in pricing.values()):
             raise StopBudget("missing or nonzero free catalog pricing: "+model)
-    print("FREE_CONFIG="+json.dumps({"roster":ROSTER,"utility":UTILITY,"max_attempts":MAX_ATTEMPTS,"forecast_cap":CAP,"pricing":{m:catalog[m]["pricing"] for m in sorted(ALLOW)}}),flush=True)
+    print("FREE_CONFIG="+json.dumps({"candidate":CANDIDATE,"roster":ROSTER,"utility":UTILITY,"max_attempts":MAX_ATTEMPTS,"forecast_cap":CAP,"pricing":{m:catalog[m]["pricing"] for m in sorted(ALLOW)}}),flush=True)
 
 def payload_for(model,prompt):
     if model not in ALLOW or not model.endswith(":free") or not isinstance(prompt,str):
@@ -67,6 +72,23 @@ def payload_for(model,prompt):
     return {"model":model,"messages":[{"role":"user","content":prompt}],"max_tokens":cap,"stream":False,
         "provider":{"allow_fallbacks":False,"require_parameters":True,"max_price":{"prompt":0,"completion":0,"request":0,"image":0}},
         "usage":{"include":True}}
+
+def http_diagnostics(exc):
+    # Never persist raw provider messages, bodies, or sensitive headers.
+    result={"http":exc.code,"limit_source":"unknown"}
+    try:
+        error=json.loads(exc.read(65536)).get("error",{})
+        source=error.get("metadata",{}).get("limit_source")
+        allowed={"openrouter_free_tier_per_minute","openrouter_free_tier_per_day",
+                 "upstream_provider_shared_pool","openrouter_in_flight_budget",
+                 "openrouter_key_limit","openrouter_credits"}
+        if source in allowed:result["limit_source"]=source
+    except Exception:pass
+    for name in ("Retry-After","X-RateLimit-Limit","X-RateLimit-Remaining","X-RateLimit-Reset"):
+        value=(exc.headers or {}).get(name)
+        if isinstance(value,str) and value.isascii() and value.isdigit() and len(value)<=16:
+            result[name.lower()]=int(value)
+    return result
 
 def invoke_sync(model, prompt):
     global stopped
@@ -98,7 +120,7 @@ def invoke_sync(model, prompt):
             # Do not export generated rationale that may reproduce licensed news.
             return content
         except urllib.error.HTTPError as e:
-            rec["http"]=e.code
+            rec.update(http_diagnostics(e))
             if e.code in (401,402,403,429):stopped=True
             raise RuntimeError("OpenRouter HTTP "+str(e.code)) from None
         except Exception as e:
@@ -123,6 +145,8 @@ async def research_once(q):
 
 async def main():
     assert_no_platform_credentials()
+    if CANDIDATE=="F1" and os.environ.get("NOSTREAM_F1_INFERENCE_AUTHORIZED")!="true":
+        raise StopBudget("F1 inference gated until quota and evidence review")
     assert datetime.now(timezone.utc)<datetime(2026,12,1,tzinfo=timezone.utc)
     before=get_meta("/key"); credits=get_meta("/credits")
     print("BEFORE_META="+json.dumps(before),flush=True)
@@ -166,7 +190,7 @@ async def main():
     median=aggregate_binary_median(members) if len(members)==3 else None
     p=getattr(report,"prediction",None)
     passed=isinstance(p,float) and math.isfinite(p) and 0<=p<=1 and len(members)==3 and abs(p-median)<=.001
-    summary={"scope":"F0 actual upstream TemplateForecaster, free substitutes, reduced research and bounded transport; NOT exact full production parity",
+    summary={"scope":CANDIDATE+" actual upstream TemplateForecaster, free substitutes, reduced research and bounded transport; NOT exact full production parity",
         "source_sha":PIN,"asknews":news_ok,"members":members,"upstream_report_probability":p,"expected_median":median,"pipeline_pass":passed,"engine_error":err,
         "attempts":len(attempted),"stopped":stopped,"reported_cost_usd":sum(float(r["cost"]) for r in ledger if r.get("cost") is not None),
         "published":0,"after_key":get_meta("/key")}

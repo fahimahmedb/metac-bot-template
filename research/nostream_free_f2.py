@@ -22,6 +22,7 @@ completed={}
 closing=False
 GEM_RETRY_DELAYS=(10,25)
 GEM_RETRY_WINDOW=120
+QUESTION_TYPE=os.getenv("NOSTREAM_QUESTION_TYPE","binary")
 def direct_payload(role,prompt):
     if role not in ROUTES or not isinstance(prompt,str) or len(prompt.encode())>29952:
         raise f.StopBudget("unapproved direct role or prompt")
@@ -106,9 +107,13 @@ def invoke_direct(role,prompt):
         rec.update({"returned_model":returned,"finish":finish,"id":rid,"usage":{k:v for k,v in usage.items() if type(v) is int},"response_sha256":hashlib.sha256(content.encode()).hexdigest()})
         if returned!=model or finish not in ("stop","STOP") or not content:raise RuntimeError("invalid direct output")
         if role in ROSTER:
-            parsed=f.parse_structured_block(content,"binary")
-            if not isinstance(parsed,f.BinaryStructured):raise RuntimeError("missing structured probability")
-            rec["structured_probability"]=parsed.posterior_prob
+            parsed=f.parse_structured_block(content,QUESTION_TYPE)
+            if parsed is None:raise RuntimeError("missing valid structured forecast")
+            if QUESTION_TYPE=="binary":
+                if not isinstance(parsed,f.BinaryStructured):raise RuntimeError("wrong structured type")
+                rec["structured_probability"]=parsed.posterior_prob
+            else:
+                rec["structured_forecast"]=parsed.model_dump(mode="json")
         with LOCK:
             completed[role]=(rec["prompt_sha256"],content)
         return content

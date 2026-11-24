@@ -27,7 +27,7 @@ FREEZE=date(2026,11,20)
 EMBARGO=timedelta(days=30)
 ORIGINS=[date(2025,11,1),date(2026,2,1),date(2026,5,1)]
 CAP=500
-FEATURES=("logit","abs_logit","horizon_log","infer","change","n")
+FEATURES=("logit","abs_logit","horizon_log","infer")
 CANDIDATES=("market","half","shrink_10","shrink_25","extremize","temperature","affine","context_lr","context_blend")
 
 def parse_date(x):
@@ -76,7 +76,7 @@ def prepare(archive,out):
                              "first":str(first[key]),"p":p,"logit":float(logit(p)),
                              "abs_logit":abs(float(logit(p))),"horizon_log":math.log1p((close-issued).days),
                              "infer":int(q["source"]=="infer"),"change":0.,"n":1,
-                             "question":re.sub(r"\\s+"," ",str(q.get("question","")).lower()).strip()}
+                             "question":re.sub(r"\s+"," ",str(q.get("question","")).lower()).strip()}
     labels=defaultdict(set)
     with tarfile.open(archive,"r|gz") as ar:
         for member in ar:

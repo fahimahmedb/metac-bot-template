@@ -1,0 +1,67 @@
+name: Paired hybrid selection (research only)
+
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: [".github/workflows/paired_hybrid.yaml"]
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  compare:
+    if: contains(github.event.head_commit.message, '[paired-hybrid]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 32
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Wait for exact prerequisite runs (bounded, no re-execution)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for attempt in $(seq 1 55); do
+            all=1
+            for id in 45294059131 45294407480; do
+              read -r status conclusion <<< "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$id" --jq '[.status, (.conclusion // "pending")] | @tsv')"
+              echo "$id $status $conclusion"
+              if [ "$status" = completed ]; then
+                [ "$conclusion" = success ] || exit 1
+              else
+                all=0
+              fi
+            done
+            [ "$all" = 1 ] && exit 0
+            sleep 30
+          done
+          echo "Prerequisite not complete; do not score without both predictions."
+          exit 1
+      - uses: actions/download-artifact@v4
+        with:
+          name: replay-frozen-predictions
+          run-id: 45294059131
+          github-token: ${{ github.token }}
+          path: /tmp/hybrid/llm
+      - uses: actions/download-artifact@v4
+        with:
+          name: economic-frozen-predictions
+          run-id: 45294407480
+          github-token: ${{ github.token }}
+          path: /tmp/hybrid/numeric
+      - uses: actions/download-artifact@v4
+        with:
+          name: replay-sealed-labels
+          run-id: 45294059131
+          github-token: ${{ github.token }}
+          path: /tmp/hybrid/labels
+      - name: Apply preregistered validation-only selection and evaluate
+        run: python research/paired_hybrid.py /tmp/hybrid/llm/predictions.json /tmp/hybrid/numeric/pred.json /tmp/hybrid/labels/labels.json /tmp/hybrid/report.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: paired-hybrid-report
+          path: /tmp/hybrid/report.json
+          if-no-files-found: error

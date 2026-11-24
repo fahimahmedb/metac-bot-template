@@ -1,5 +1,7 @@
 """Read-only provider preflight. No inference, search queries or submissions."""
 import ast
+import base64
+import urllib.parse
 import json
 import os
 import urllib.request
@@ -33,6 +35,27 @@ def get(url, headers=None, extract=None):
     except Exception as e:
         return {"error_type": type(e).__name__}
 
+def asknews_auth():
+    # OAuth token issuance only, no paid news request. Never log token or response body.
+    try:
+        raw = os.environ["ASKNEWS_CLIENT_ID"] + ":" + os.environ["ASKNEWS_SECRET"]
+        auth = base64.b64encode(raw.encode()).decode("ascii")
+        req = urllib.request.Request(
+            "https://auth.asknews.app/oauth2/token",
+            data=urllib.parse.urlencode({"grant_type":"client_credentials","scope":"news"}).encode(),
+            headers={"Authorization":"Basic "+auth,
+                     "Content-Type":"application/x-www-form-urlencoded",
+                     "Accept":"application/json"},
+            method="POST")
+        with OPENER.open(req, timeout=20) as resp:
+            body = json.loads(resp.read(65536))
+            return {"http":resp.status,"token_issued":bool(body.get("access_token")),
+                    "scope":body.get("scope"),"expires_in":body.get("expires_in")}
+    except urllib.error.HTTPError as e:
+        return {"http":e.code,"token_issued":False}
+    except Exception as e:
+        return {"error_type":type(e).__name__,"token_issued":False}
+
 def main():
     status = {k: present(k) for k in KEYS}
     print("PRESENCE_JSON=" + json.dumps(status, sort_keys=True))
@@ -62,7 +85,11 @@ def main():
                     ("limit", "limit_remaining", "usage", "is_free_tier")})
     if status["METACULUS_TOKEN"]:
         probes["METACULUS_TOKEN"] = get("https://www.metaculus.com/api/posts/?limit=1",
-            {"Authorization": "Token " + os.environ["METACULUS_TOKEN"]})
+            {"Authorization": "Token " + os.environ["METACULUS_TOKEN"]},
+            extract=lambda d: {"json_object":isinstance(d,dict),"has_results":isinstance(d.get("results"),list)})
+        probes["METACULUS_ANONYMOUS_CONTROL"] = get("https://www.metaculus.com/api/posts/?limit=1")
+    if status["ASKNEWS_CLIENT_ID"] and status["ASKNEWS_SECRET"]:
+        probes["ASKNEWS_OAUTH"] = asknews_auth()
     if status["OPENAI_API_KEY"]:
         probes["OPENAI_API_KEY"] = get("https://api.openai.com/v1/models",
             {"Authorization": "Bearer " + os.environ["OPENAI_API_KEY"]})

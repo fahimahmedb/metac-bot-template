@@ -22,6 +22,7 @@ completed={}
 closing=False
 GEM_RETRY_DELAYS=(10,25)
 GEM_RETRY_WINDOW=120
+G2_GOOGLE_SOCKET_TIMEOUT=300
 QUESTION_TYPE=os.getenv("NOSTREAM_QUESTION_TYPE","binary")
 G2=os.getenv("NOSTREAM_G2")=="true"
 TYPED_MEMBERS={}
@@ -45,7 +46,8 @@ def direct_request(role,prompt):
     if not key:raise f.StopBudget("missing direct credential")
     headers.update({"Accept":"application/json","Content-Type":"application/json"})
     req=urllib.request.Request(url,headers=headers,data=json.dumps(payload).encode())
-    with f.OPENER.open(req,timeout=150) as r:
+    timeout=G2_GOOGLE_SOCKET_TIMEOUT if G2 and role==GEM else 150
+    with f.OPENER.open(req,timeout=timeout) as r:
         body=json.loads(r.read(8_000_000))
         rates={k.lower():int(v) for k,v in r.headers.items() if k.lower() in ("x-ratelimit-limit-requests-minute","x-ratelimit-limit-tokens-minute","x-ratelimit-limit-tokens-day") and v.isdigit()}
         return body,rates
@@ -84,13 +86,18 @@ def invoke_direct(role,prompt):
     with LOCK:
         if closing:raise f.StopBudget("closed direct role")
         digest=hashlib.sha256(prompt.encode()).hexdigest()
-        if role in completed:
-            old_digest,content=completed[role]
+        # Distinct auxiliary extraction prompts are budgeted independently,
+        # while every forecaster retains its single exact prompt identity.
+        slot=(role,digest) if G2 and role==UTIL else role
+        if slot in completed:
+            old_digest,content=completed[slot]
             if digest!=old_digest:raise f.StopBudget("different prompt for completed role")
             print("F2_CACHE_HIT="+json.dumps({"role":role,"prompt_sha256":digest}),flush=True)
             return content
-        if role in seen:raise f.StopBudget("duplicate in-flight or failed role")
-        seen.add(role)
+        if slot in seen:raise f.StopBudget("duplicate in-flight or failed role")
+        if G2 and role==UTIL and sum(isinstance(k,tuple) and k[0]==UTIL for k in seen)>=3:
+            raise f.StopBudget("auxiliary extraction budget exhausted")
+        seen.add(slot)
         rec={"role":role,"provider":provider,"requested_model":model,"max_tokens":cap,"prompt_sha256":hashlib.sha256(prompt.encode()).hexdigest(),"issued_at":datetime.now(timezone.utc).isoformat(),"billing_basis":"trial-attested-not-invoice-verified" if provider=="cerebras" else "Gemma free-only public price"}
         DIRECT.append(rec)
     start=time.monotonic()
@@ -112,14 +119,19 @@ def invoke_direct(role,prompt):
         if returned!=model or finish not in ("stop","STOP") or not content:raise RuntimeError("invalid direct output")
         if role in ROSTER:
             parsed=f.parse_structured_block(content,QUESTION_TYPE)
-            if parsed is None:raise RuntimeError("missing valid structured forecast")
-            if QUESTION_TYPE=="binary":
+            if G2:
+                # A transport-successful answer must reach the original extraction
+                # ladder (strict block -> deterministic repair -> bounded parser).
+                rec["strict_block_valid"]=parsed is not None
+                if parsed is not None:rec["structured_forecast"]=parsed.model_dump(mode="json")
+            elif QUESTION_TYPE=="binary":
                 if not isinstance(parsed,f.BinaryStructured):raise RuntimeError("wrong structured type")
                 rec["structured_probability"]=parsed.posterior_prob
             else:
+                if parsed is None:raise RuntimeError("missing valid structured forecast")
                 rec["structured_forecast"]=parsed.model_dump(mode="json")
         with LOCK:
-            completed[role]=(rec["prompt_sha256"],content)
+            completed[slot]=(rec["prompt_sha256"],content)
         return content
     except urllib.error.HTTPError as e:
         rec["http"]=e.code
@@ -138,8 +150,8 @@ async def invoke(self,prompt,*args,**kwargs):
         content=await asyncio.to_thread(f.invoke_sync,role,prompt)
         if G2:
             parsed=f.parse_structured_block(content,QUESTION_TYPE)
-            if parsed is None:raise RuntimeError("Nemotron missing typed structured forecast")
-            NEM_TYPED["structured_forecast"]=parsed.model_dump(mode="json")
+            NEM_TYPED["strict_block_valid"]=parsed is not None
+            if parsed is not None:NEM_TYPED["structured_forecast"]=parsed.model_dump(mode="json")
         return content
     if role not in ROUTES:raise f.StopBudget("unknown F2 role")
     return await asyncio.to_thread(invoke_direct,role,prompt)
@@ -217,7 +229,7 @@ def validate_g2(report,question,degradation,err,before,after):
         quota_ok=quota["limit"]==f.quota_start["limit"] and quota["used"]>=f.quota_start["used"] and f.quota_day==datetime.now(timezone.utc).date().isoformat()
     except f.StopBudget:quota_ok=False
     passed=(set(members)==set(ROSTER) and len(nem)==1 and set(direct)=={GPT,GEM} and len(hashes)==1 and bool(NEM_TYPED) and agg_ok and degradation==0 and err is None and quota_ok and not f.stopped and before.get("usage")==after.get("usage")==0)
-    summary={"candidate":"F2","gate":"G2","question_type":QUESTION_TYPE,"source_sha":f.PIN,"members":members,"report":value,"aggregation_verified":agg_ok,"numeric_independent_recomputation":False if QUESTION_TYPE=="numeric" else None,"common_prompt":len(hashes)==1,"degradation":degradation,"engine_error":err,"technical_pipeline_pass":passed,"openrouter_after":after,"openrouter_cost_usd":sum(float(r["cost"]) for r in f.ledger if r.get("cost") is not None),"direct_billing_independently_verified":False,"published":0,"research_scope":"public BLS only","attempts":len(f.attempted)+sum(len(r.get("dispatches",[])) for r in DIRECT)}
+    summary={"candidate":"F2","gate":"G2","question_type":QUESTION_TYPE,"source_sha":f.PIN,"members":members,"report":value,"aggregation_verified":agg_ok,"numeric_independent_recomputation":False if QUESTION_TYPE=="numeric" else None,"strict_block_valid":{NEM:NEM_TYPED.get("strict_block_valid"),**{role:r.get("strict_block_valid") for role,r in direct.items()}},"common_prompt":len(hashes)==1,"degradation":degradation,"engine_error":err,"technical_pipeline_pass":passed,"openrouter_after":after,"openrouter_cost_usd":sum(float(r["cost"]) for r in f.ledger if r.get("cost") is not None),"direct_billing_independently_verified":False,"published":0,"research_scope":"public BLS only","attempts":len(f.attempted)+sum(len(r.get("dispatches",[])) for r in DIRECT)}
     (OUT/"g2-summary.json").write_text(json.dumps(summary,sort_keys=True))
     (OUT/"g2-aggregations.json").write_text(json.dumps(AGGREGATIONS,sort_keys=True))
     print("G2_RESULT="+json.dumps(summary,sort_keys=True),flush=True)

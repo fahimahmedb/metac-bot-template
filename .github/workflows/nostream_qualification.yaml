@@ -1,0 +1,64 @@
+name: No-Stream pinned offline qualification
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/nostream_qualification.yaml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  offline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Retrieve exact MIT-licensed upstream source
+        uses: actions/checkout@v5
+        with:
+          repository: No-Stream/nostreambot-metaculus-bot
+          ref: 79c1d7a1192a00724646ab05c67f3b776d2d7b65
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Verify identity and license
+        run: |
+          test "$(git rev-parse HEAD)" = "79c1d7a1192a00724646ab05c67f3b776d2d7b65"
+          grep -q 'MIT License' LICENSE
+          git log -1 --format='%H %s'
+          sha256sum LICENSE uv.lock
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
+          python-version: "3.12"
+      - name: Install pinned dependencies
+        run: uv sync --dev --frozen
+      - name: Test research, aggregation, leakage and full pipeline offline
+        env:
+          METACULUS_TOKEN: ""
+          OPENAI_API_KEY: ""
+          OPENROUTER_API_KEY: ""
+          ANTHROPIC_API_KEY: ""
+          GEMINI_API_KEY: ""
+          GOOGLE_API_KEY: ""
+          ASKNEWS_CLIENT_ID: ""
+          ASKNEWS_CLIENT_SECRET: ""
+          FUTUREEVAL_LIVE_ENABLED: "false"
+        run: |
+          set -o pipefail
+          uv run --frozen pytest -m 'not live and not allow_network' \
+            tests/test_egress_guards.py \
+            tests/test_publish_gate.py \
+            tests/test_aggregation_strategies.py \
+            tests/test_research_orchestrator.py \
+            tests/test_leakage.py \
+            tests/test_offline_replay.py \
+            tests/test_offline_e2e_forecast.py \
+            --junitxml=nostream-offline.xml | tee nostream-offline.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nostream-offline-qualification
+          path: |
+            nostream-offline.xml
+            nostream-offline.log
+            LICENSE
+          if-no-files-found: warn
+          retention-days: 30

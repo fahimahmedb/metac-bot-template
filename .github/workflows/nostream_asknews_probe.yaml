@@ -1,0 +1,65 @@
+name: No-Stream independent AskNews qualification
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/nostream_asknews_probe.yaml']
+permissions:
+  contents: read
+concurrency:
+  group: nostream-asknews-single-probe
+  cancel-in-progress: false
+jobs:
+  probe:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          repository: No-Stream/nostreambot-metaculus-bot
+          ref: 79c1d7a1192a00724646ab05c67f3b776d2d7b65
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
+          python-version: '3.12'
+      - name: Install pinned dependencies without credentials
+        run: uv sync --dev --frozen
+      - name: Execute one news retrieval independently of OpenRouter balance
+        env:
+          ASKNEWS_CLIENT_ID: ${{ secrets.ASKNEWS_CLIENT_ID }}
+          ASKNEWS_SECRET: ${{ secrets.ASKNEWS_SECRET }}
+        run: |
+          test "$(git rev-parse HEAD)" = "79c1d7a1192a00724646ab05c67f3b776d2d7b65"
+          mkdir -p probe
+          uv run --frozen python - <<'PY'
+          import asyncio, hashlib, json, os, time
+          from datetime import datetime, timezone
+          from pathlib import Path
+          from asknews_sdk import AsyncAskNewsSDK
+          async def main():
+              started=time.monotonic()
+              result={"scope":"one real news request, no LLM or Metaculus submission","issued_at":datetime.now(timezone.utc).isoformat(),"source_sha":"79c1d7a1192a00724646ab05c67f3b776d2d7b65","ok":False}
+              try:
+                  assert os.environ.get("ASKNEWS_CLIENT_ID") and os.environ.get("ASKNEWS_SECRET")
+                  assert not os.environ.get("METACULUS_TOKEN") and not os.environ.get("OPENROUTER_API_KEY")
+                  async with AsyncAskNewsSDK(client_id=os.environ["ASKNEWS_CLIENT_ID"],client_secret=os.environ["ASKNEWS_SECRET"],scopes={"news"}) as sdk:
+                      response=await asyncio.wait_for(sdk.news.search_news(query="United States CPI inflation October November 2026 Bureau of Labor Statistics",n_articles=5,return_type="both",strategy="latest news"),timeout=60)
+                  articles=response.as_dicts or []
+                  evidence=response.as_string or ""
+                  result.update({"articles":len(articles),"chars":len(evidence),"evidence_sha256":hashlib.sha256(evidence.encode()).hexdigest(),"ok":bool(articles and evidence.strip())})
+              except Exception as e:
+                  result.update({"error_type":type(e).__name__,"status":getattr(e,"status_code",None)})
+              result["seconds"]=round(time.monotonic()-started,2)
+              payload=json.dumps(result,sort_keys=True)
+              Path("probe/summary.json").write_text(payload)
+              print("ASKNEWS_PROBE="+payload,flush=True)
+              if not result["ok"]: raise SystemExit(1)
+          asyncio.run(main())
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: asknews-independent-probe
+          path: probe/summary.json
+          if-no-files-found: warn

@@ -9,7 +9,7 @@ permissions:
 jobs:
   smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v5
         with:
@@ -67,7 +67,7 @@ jobs:
           catalog=request(base+"/models")
           # Kilo explicitly allows anonymous calls for free models. No credentials,
           # no paid route, no substitution with non-free IDs.
-          free=sorted({m["id"] for m in catalog["data"] if m.get("id","").endswith(":free")})
+          free=sorted({m["id"] for m in catalog["data"] if m.get("id","").endswith(":free") and (m.get("top_provider",{}).get("max_completion_tokens") or 16384)>=16384})
           selected=[]
           vendors=set()
           for model in free:
@@ -80,9 +80,9 @@ jobs:
           def infer(model):
               started=time.monotonic()
               try:
-                  body=request(base+"/chat/completions",{"model":model,"messages":[{"role":"user","content":prompt}],"max_tokens":4096,"stream":False},timeout=100)
+                  body=request(base+"/chat/completions",{"model":model,"messages":[{"role":"user","content":prompt}],"max_tokens":16384,"stream":False},timeout=240)
                   text=body["choices"][0]["message"].get("content") or ""
-                  parsed=parse_structured_block(text,"binary")
+                  parsed=parse_structured_block(text,"binary") if body["choices"][0].get("finish_reason")=="stop" and body.get("model")==model and body.get("usage",{}).get("cost")==0 else None
                   p=parsed.posterior_prob if isinstance(parsed,BinaryStructured) else None
                   return {"requested":model,"returned":body.get("model"),"id":body.get("id"),"usage":body.get("usage"),"seconds":round(time.monotonic()-started,2),"probability":p,"response":text,"finish_reason":body["choices"][0].get("finish_reason")}
               except urllib.error.HTTPError as exc:

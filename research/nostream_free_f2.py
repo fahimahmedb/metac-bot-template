@@ -18,7 +18,10 @@ OUT=Path("free-results")
 DIRECT=[]
 LOCK=threading.Lock()
 seen=set()
+completed={}
 closing=False
+GEM_RETRY_DELAYS=(10,25)
+GEM_RETRY_WINDOW=120
 def direct_payload(role,prompt):
     if role not in ROUTES or not isinstance(prompt,str) or len(prompt.encode())>29952:
         raise f.StopBudget("unapproved direct role or prompt")
@@ -41,17 +44,53 @@ def direct_request(role,prompt):
         body=json.loads(r.read(8_000_000))
         rates={k.lower():int(v) for k,v in r.headers.items() if k.lower() in ("x-ratelimit-limit-requests-minute","x-ratelimit-limit-tokens-minute","x-ratelimit-limit-tokens-day") and v.isdigit()}
         return body,rates
+def bounded_direct_request(role,prompt,rec):
+    # A successful response is never repeated. Only explicit transient 503 on
+    # this exact free Gemma role may retry; no model or provider fallback.
+    start=time.monotonic()
+    rec["dispatches"]=[]
+    for index in range(1+(len(GEM_RETRY_DELAYS) if role==GEM else 0)):
+        attempt={"number":index+1,"issued_at":datetime.now(timezone.utc).isoformat()}
+        rec["dispatches"].append(attempt)
+        try:
+            body,rates=direct_request(role,prompt)
+            attempt["http"]=200
+            return body,rates
+        except urllib.error.HTTPError as e:
+            attempt["http"]=e.code
+            if role!=GEM or e.code!=503 or index>=len(GEM_RETRY_DELAYS):raise
+            hint=(e.headers or {}).get("Retry-After")
+            if hint is not None and (not isinstance(hint,str) or not hint.isdigit() or len(hint)>3):raise
+            delay=max(GEM_RETRY_DELAYS[index],int(hint or 0))
+            if delay>60 or time.monotonic()-start+delay>=GEM_RETRY_WINDOW:raise
+            attempt["retry_wait_seconds"]=delay
+            print("F2_GEMMA_RETRY="+json.dumps(attempt),flush=True)
+            time.sleep(delay)
+            with LOCK:
+                if closing:raise f.StopBudget("run closed before retry")
+        except Exception as e:
+            attempt["error"]=type(e).__name__
+            raise
+    raise f.StopBudget("retry exhausted")
+
 def invoke_direct(role,prompt):
     provider,model,cap=ROUTES[role]
     direct_payload(role,prompt)
     with LOCK:
-        if closing or role in seen:raise f.StopBudget("duplicate or closed direct role")
+        if closing:raise f.StopBudget("closed direct role")
+        digest=hashlib.sha256(prompt.encode()).hexdigest()
+        if role in completed:
+            old_digest,content=completed[role]
+            if digest!=old_digest:raise f.StopBudget("different prompt for completed role")
+            print("F2_CACHE_HIT="+json.dumps({"role":role,"prompt_sha256":digest}),flush=True)
+            return content
+        if role in seen:raise f.StopBudget("duplicate in-flight or failed role")
         seen.add(role)
         rec={"role":role,"provider":provider,"requested_model":model,"max_tokens":cap,"prompt_sha256":hashlib.sha256(prompt.encode()).hexdigest(),"issued_at":datetime.now(timezone.utc).isoformat(),"billing_basis":"trial-attested-not-invoice-verified" if provider=="cerebras" else "Gemma free-only public price"}
         DIRECT.append(rec)
     start=time.monotonic()
     try:
-        body,rates=direct_request(role,prompt)
+        body,rates=bounded_direct_request(role,prompt,rec)
         if provider=="cerebras":
             choice=body["choices"][0]
             returned=body.get("model");finish=choice.get("finish_reason");content=choice["message"].get("content") or ""
@@ -70,6 +109,8 @@ def invoke_direct(role,prompt):
             parsed=f.parse_structured_block(content,"binary")
             if not isinstance(parsed,f.BinaryStructured):raise RuntimeError("missing structured probability")
             rec["structured_probability"]=parsed.posterior_prob
+        with LOCK:
+            completed[role]=(rec["prompt_sha256"],content)
         return content
     except urllib.error.HTTPError as e:
         rec["http"]=e.code
@@ -135,7 +176,7 @@ async def main():
     p=getattr(report,"prediction",None)
     after=f.get_meta("/key")
     passed=(isinstance(p,float) and math.isfinite(p) and median is not None and abs(p-median)<=.001 and len(hashes)==1 and degradation==0 and not f.stopped and after.get("usage")==0 and all(r.get("cost")==0 for r in f.ledger))
-    summary={"candidate":"F2","source_sha":f.PIN,"members":members,"common_prompt":len(hashes)==1,"expected_median":median,"upstream_report_probability":p,"degradation":degradation,"engine_error":err,"technical_pipeline_pass":passed,"openrouter_cost_usd":sum(float(r["cost"]) for r in f.ledger if r.get("cost") is not None),"openrouter_after":after,"direct_billing_independently_verified":False,"research_scope":"public BLS only, not complete No-Stream research parity","published":0,"attempts":len(f.attempted)+len(DIRECT)}
+    summary={"candidate":"F2","source_sha":f.PIN,"members":members,"common_prompt":len(hashes)==1,"expected_median":median,"upstream_report_probability":p,"degradation":degradation,"engine_error":err,"technical_pipeline_pass":passed,"openrouter_cost_usd":sum(float(r["cost"]) for r in f.ledger if r.get("cost") is not None),"openrouter_after":after,"direct_billing_independently_verified":False,"research_scope":"public BLS only, not complete No-Stream research parity","published":0,"attempts":len(f.attempted)+sum(len(r.get("dispatches",[])) for r in DIRECT),"direct_roles":len(DIRECT)}
     print("F2_RESULT="+json.dumps(summary,sort_keys=True),flush=True)
     (OUT/"summary.json").write_text(json.dumps(summary,sort_keys=True))
     if not passed:raise SystemExit("BLOCK: F2 technical integration incomplete")

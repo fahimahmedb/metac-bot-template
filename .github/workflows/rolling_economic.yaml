@@ -1,0 +1,107 @@
+name: Rolling economic learning (sealed final test)
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: [".github/workflows/rolling_economic.yaml", "research/rolling_economic.py", "research/test_rolling_economic.py"]
+permissions:
+  contents: read
+  actions: read
+jobs:
+  prepare:
+    if: contains(github.event.head_commit.message, '[rolling-economic]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install numpy==2.2.6
+      - run: python -m unittest discover -s research -p "test_*.py" -v
+      - uses: actions/download-artifact@v4
+        with:
+          name: replay-inputs
+          run-id: 45294059131
+          github-token: ${{ github.token }}
+          path: /tmp/previous
+      - name: Prepare pinned chronological features and sealed labels
+        run: |
+          curl --fail --location --retry 2 --max-time 300 --max-filesize 300000000 "https://www.forecastbench.org/assets/data/processed-forecast-sets/processed_forecast_sets.tar.gz" -o /tmp/archive.tar.gz
+          python research/rolling_economic.py prepare /tmp/archive.tar.gz /tmp/previous/inputs.json /tmp/rolling
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rolling-development
+          path: /tmp/rolling/dev.json
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rolling-test-inputs
+          path: /tmp/rolling/test_inputs.json
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rolling-test-labels
+          path: /tmp/rolling/test_labels.json
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rolling-manifest
+          path: /tmp/rolling/manifest.json
+          if-no-files-found: error
+  fit:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install 'scikit-learn==1.7.2' 'numpy==2.2.6' 'scipy==1.15.3' 'joblib==1.5.2' 'threadpoolctl==3.6.0'
+      - uses: actions/download-artifact@v4
+        with:
+          name: rolling-development
+          path: /tmp/rolling
+      - uses: actions/download-artifact@v4
+        with:
+          name: rolling-test-inputs
+          path: /tmp/rolling
+      - name: Select on rolling development folds and freeze all predictions
+        run: |
+          test ! -f /tmp/rolling/test_labels.json
+          OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 python research/rolling_economic.py fit /tmp/rolling/dev.json /tmp/rolling/test_inputs.json /tmp/rolling/pred.json
+          test ! -f /tmp/rolling/test_labels.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rolling-frozen-predictions
+          path: /tmp/rolling/pred.json
+          if-no-files-found: error
+  score:
+    needs: [prepare,fit]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install numpy==2.2.6
+      - uses: actions/download-artifact@v4
+        with:
+          name: rolling-frozen-predictions
+          path: /tmp/rolling
+      - uses: actions/download-artifact@v4
+        with:
+          name: rolling-test-inputs
+          path: /tmp/rolling
+      - uses: actions/download-artifact@v4
+        with:
+          name: rolling-test-labels
+          path: /tmp/rolling
+      - name: Open labels and evaluate frozen policy
+        run: python research/rolling_economic.py score /tmp/rolling/pred.json /tmp/rolling/test_inputs.json /tmp/rolling/test_labels.json /tmp/rolling/report.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rolling-scoring-report
+          path: /tmp/rolling/report.json
+          if-no-files-found: error

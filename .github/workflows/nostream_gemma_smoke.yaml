@@ -41,7 +41,9 @@ jobs:
                   raise SystemExit("BLOCK: identity or generation capability unverified")
               prompt="Synthetic noncontest test. A fair six-sided die is rolled twice independently. YES if at least one roll is a six. Estimate probability with a short rationale, then append a fenced JSON block containing exactly question_type (binary) and posterior_prob (number between 0 and 1). Do not use tools."
               t=time.monotonic()
-              body=request(":generateContent",{"contents":[{"role":"user","parts":[{"text":prompt}]}],"generationConfig":{"maxOutputTokens":4096,"candidateCount":1}})
+              # One fresh attempt after the previous run's 503. No retries on any status.
+              payload={"contents":[{"role":"user","parts":[{"text":prompt}]}],"generationConfig":{"maxOutputTokens":4096,"candidateCount":1}}
+              body=request(":generateContent",payload)
               choice=body["candidates"][0]
               content="".join(p.get("text","") for p in choice.get("content",{}).get("parts",[]) if not p.get("thought"))
               match=re.search(r"```json\s*(.*?)\s*```",content,re.S)
@@ -51,6 +53,7 @@ jobs:
               print("GEMMA_SMOKE="+json.dumps({"http":200,"requested_model":model,"returned_model":body.get("modelVersion"),"response_id":body.get("responseId"),"finish":choice.get("finishReason"),"usage":{k:v for k,v in body.get("usageMetadata",{}).items() if type(v) is int},"probability":p if passed else None,"passed":passed,"seconds":round(time.monotonic()-t,2),"prompt_sha256":hashlib.sha256(prompt.encode()).hexdigest(),"response_sha256":hashlib.sha256(content.encode()).hexdigest()}),flush=True)
               if not passed:raise SystemExit("BLOCK: structured response unverified")
           except urllib.error.HTTPError as e:
-              print("GEMMA_HTTP="+json.dumps({"http":e.code}),flush=True)
+              retry=e.headers.get("Retry-After","") if e.headers else ""
+              print("GEMMA_HTTP="+json.dumps({"http":e.code,"retry_after_seconds":int(retry) if retry.isdigit() and len(retry)<8 else None}),flush=True)
               raise SystemExit("BLOCK: provider rejected request")
           PY

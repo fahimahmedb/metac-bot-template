@@ -1,4 +1,4 @@
-name: D06 exact prompt and typed recovery offline
+name: D06 exact prompt and typed recovery offline (section assembly corrected)
 on:
   push:
     branches: [research/historical-blind-calibration]

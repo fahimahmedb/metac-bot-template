@@ -1,4 +1,4 @@
-name: No-Stream F2 G2 diverse prospective trials
+name: No-Stream F2 G2 D06 bounded recovery
 on:
   push:
     branches: [research/historical-blind-calibration]
@@ -19,26 +19,6 @@ jobs:
       max-parallel: 1
       matrix:
         include:
-          - case_id: D01
-            question_type: binary
-            evidence_run: 45522593032
-            snapshot_sha256: 25abefef6ef13f8346a5669cc52e52981867f5e9a58215606daa167e67a74815
-          - case_id: D02
-            question_type: multiple_choice
-            evidence_run: 45520535838
-            snapshot_sha256: 26bbb1fd280179316d7a358e9eb401a29498d8b7cfc860d4ccaac1f1aa86abc4
-          - case_id: D03
-            question_type: numeric
-            evidence_run: 45522593032
-            snapshot_sha256: c69d9bba0dd7f22761d0788188926368935ab79f0b993202ed7020cbe1f16804
-          - case_id: D04
-            question_type: numeric
-            evidence_run: 45520535838
-            snapshot_sha256: 319a2d90575a77643283824c379ac386053aef350eaa5f64641dee5deaa935f5
-          - case_id: D05
-            question_type: multiple_choice
-            evidence_run: 45520535838
-            snapshot_sha256: 320b3e7a322aa5b4831778f959b4b260ae45ca0ff1fbfe0b0a0cbdf5d8061721
           - case_id: D06
             question_type: binary
             evidence_run: 45520535838
@@ -236,6 +216,6 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: nostream-diverse-${{ matrix.case_id }}-evidence
+          name: nostream-diverse-${{ matrix.case_id }}-recovery-evidence
           path: upstream/free-results/
           if-no-files-found: warn

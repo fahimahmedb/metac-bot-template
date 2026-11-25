@@ -1,4 +1,4 @@
-name: D06 exact prompt and typed recovery offline (section assembly corrected)
+name: D06 replay and F3 admission offline
 on:
   push:
     branches: [research/historical-blind-calibration]
@@ -27,7 +27,7 @@ jobs:
       - name: Install pinned reference and offline recovery probe
         run: |
           test "$(git -C upstream rev-parse HEAD)" = "79c1d7a1192a00724646ab05c67f3b776d2d7b65"
-          cp research/nostream_runner.py research/nostream_free_f0.py research/nostream_free_f2.py research/g2_diverse_cases.json research/g2_diverse_evidence.py research/g2_d06_recovery_probe.py upstream/
+          cp research/nostream_runner.py research/nostream_free_f0.py research/nostream_free_f2.py research/g2_diverse_cases.json research/g2_diverse_evidence.py research/g2_d06_recovery_probe.py research/g2_member_screen.py upstream/
           cd upstream
           uv sync --dev --frozen
       - uses: actions/download-artifact@v4
@@ -67,4 +67,6 @@ jobs:
           NUMERIC_STACKING_ENABLED: 'false'
           PERSIST_RESEARCH_ENABLED: 'false'
           RAW_RESEARCH_LOG_ENABLED: 'false'
-        run: uv run --frozen python g2_d06_recovery_probe.py
+        run: |
+          uv run --frozen python g2_d06_recovery_probe.py
+          uv run --frozen python g2_member_screen.py

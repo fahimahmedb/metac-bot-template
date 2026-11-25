@@ -64,8 +64,13 @@ def reconstruct_prompt():
     # This deliberately does not export prompt text or relax the live date guard.
     q,evidence,sha=x.load_diverse_input()
     require(sha==SNAPSHOT and q.id_of_question==990016, "question identity")
+    # Reuse the same pure provider-section assembly as the actual orchestrator.
+    # The first probe incorrectly passed the raw custom source, omitting its header.
+    from metaculus_bot.research.section_format import assemble_provider_sections
+    from metaculus_bot.research.provider_diagnostics import ProviderResult
+    research,_=assemble_provider_sections([(evidence,ProviderResult(name="custom",status="ok",chars=len(evidence),latency_ms=0))])
     with patch.object(prompts,"datetime",FrozenPromptClock):
-        prompt=prompts.binary_prompt(q,evidence)
+        prompt=prompts.binary_prompt(q,research)
     require(isinstance(prompt,str) and digest(prompt)==PROMPT, "exact original prompt NOT reproduced")
     return {"prompt_sha256":digest(prompt),"prompt_bytes":len(prompt.encode()),"snapshot_sha256":sha}
 

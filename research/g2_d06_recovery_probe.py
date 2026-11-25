@@ -59,20 +59,33 @@ def verify_original(summary, router, direct):
     require(missing["prompt_sha256"]==PROMPT and missing["provider"]=="google" and missing["requested_model"]=="gemma-4-26b-a4b-it" and [a["http"] for a in missing["dispatches"]]==[503,503,503], "missing member mismatch")
     return dict(ORIGINAL_BALLOTS)
 
-def reconstruct_prompt():
-    # Offline only: use the original source constructor and exact frozen evidence.
-    # This deliberately does not export prompt text or relax the live date guard.
-    q,evidence,sha=x.load_diverse_input()
-    require(sha==SNAPSHOT and q.id_of_question==990016, "question identity")
-    # Reuse the same pure provider-section assembly as the actual orchestrator.
-    # The first probe incorrectly passed the raw custom source, omitting its header.
+def reconstruct_prompt_text():
+    # An explicit historical replay, not an override of the original live date
+    # gate. No source acquisition or new evidence. The exact original bytes
+    # must reproduce the same prompt before any separate candidate admission.
+    import g2_diverse_evidence as ev
+    raw=Path("diverse-input/snapshot.json").read_bytes()
+    sha=hashlib.sha256(raw).hexdigest()
+    require(sha==SNAPSHOT,"snapshot hash mismatch")
+    doc=json.loads(raw)
+    case=ev.load_case("D06")
+    require(doc["case"]==case and doc["observation_cutoff"]==ev.CUTOFF and doc["retrieved_at"].startswith("2026-11-25T"),"frozen source mismatch")
+    rows=doc["observations"]
+    require(bool(rows) and all(r[0]<=ev.CUTOFF and type(r[1]) in (int,float) and math.isfinite(r[1]) for r in rows),"invalid observations")
+    q=ev.build_question(case)
+    require(q.id_of_question==990016,"question identity")
+    evidence="Public source "+case["source"]+"; observation units: USD per EUR, ECB daily reference rate; retrieved "+doc["retrieved_at"]+". Observations (period, value): "+json.dumps(rows,separators=(",",":"))
     from metaculus_bot.research.section_format import assemble_provider_sections
     from metaculus_bot.research.provider_diagnostics import ProviderResult
     research,_=assemble_provider_sections([(evidence,ProviderResult(name="custom",status="ok",chars=len(evidence),latency_ms=0))])
     with patch.object(prompts,"datetime",FrozenPromptClock):
         prompt=prompts.binary_prompt(q,research)
-    require(isinstance(prompt,str) and digest(prompt)==PROMPT, "exact original prompt NOT reproduced")
-    return {"prompt_sha256":digest(prompt),"prompt_bytes":len(prompt.encode()),"snapshot_sha256":sha}
+    require(isinstance(prompt,str) and digest(prompt)==PROMPT,"exact original prompt NOT reproduced")
+    return prompt
+
+def reconstruct_prompt():
+    prompt=reconstruct_prompt_text()
+    return {"prompt_sha256":digest(prompt),"prompt_bytes":len(prompt.encode()),"snapshot_sha256":SNAPSHOT}
 
 def test_only_complete(original, *, missing_role, value, prompt_sha, synthetic):
     """Offline test helper; intentionally not a live admission or a real ballot."""

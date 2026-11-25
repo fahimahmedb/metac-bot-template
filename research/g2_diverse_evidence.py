@@ -39,12 +39,13 @@ def normalize(case,body):
         for r in series[0]["data"]:
             if r["period"]=="M13":continue
             month=r["year"]+"-"+r["period"][1:]
-            if "2025-01"<=month<="2026-10":
+            if "2025-01"<=month<="2026-10" and r["value"] not in ("-",".","",None):
                 result.append([month,float(r["value"])])
         minimum=12
     elif adapter=="usgs":
         obj=json.loads(body); features=obj["features"]
-        assert obj["metadata"]["count"]==len(features)<1000
+        assert len(features)<1000
+        if "count" in obj.get("metadata",{}):assert obj["metadata"]["count"]==len(features)
         ids=set();counts=Counter()
         for event in features:
             p=event["properties"]

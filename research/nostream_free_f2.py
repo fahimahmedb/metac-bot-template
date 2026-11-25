@@ -25,6 +25,9 @@ GEM_RETRY_WINDOW=120
 G2_GOOGLE_SOCKET_TIMEOUT=300
 QUESTION_TYPE=os.getenv("NOSTREAM_QUESTION_TYPE","binary")
 G2=os.getenv("NOSTREAM_G2")=="true"
+DIVERSE_CASE=os.getenv("NOSTREAM_DIVERSE_CASE","")
+DIVERSE_SNAPSHOT_SHA=None
+DIRECT_DISPATCHES=[]
 TYPED_MEMBERS={}
 NEM_TYPED={}
 AGGREGATIONS=[]
@@ -51,12 +54,51 @@ def direct_request(role,prompt):
         body=json.loads(r.read(8_000_000))
         rates={k.lower():int(v) for k,v in r.headers.items() if k.lower() in ("x-ratelimit-limit-requests-minute","x-ratelimit-limit-tokens-minute","x-ratelimit-limit-tokens-day") and v.isdigit()}
         return body,rates
+def admit_diverse_dispatch(role):
+    # One OpenRouter attempt is reserved by its existing independent guard.
+    # Of the four direct slots, preserve one initial call for each missing
+    # forecaster even when a utility invocation races with forecasters.
+    if not DIVERSE_CASE:return
+    with LOCK:
+        if closing or role not in ROUTES:raise f.StopBudget("closed or unknown dispatch")
+        reserved=sum(m!=role and m not in DIRECT_DISPATCHES for m in (GPT,GEM))
+        if len(DIRECT_DISPATCHES)+1+reserved>4:
+            raise f.StopBudget("diverse five-attempt case budget exhausted")
+        DIRECT_DISPATCHES.append(role)
+
+def load_diverse_input():
+    import g2_diverse_evidence as ev
+    case=ev.load_case(DIVERSE_CASE)
+    if not G2 or case["type"]!=QUESTION_TYPE:
+        raise f.StopBudget("diverse question mismatch")
+    if os.getenv("NOSTREAM_CEREBRAS_NO_RECHARGE_ATTESTED")!="true":
+        raise f.StopBudget("owner no-recharge attestation missing")
+    if datetime.now(timezone.utc).date().isoformat()!="2026-11-25":
+        raise f.StopBudget("diverse campaign UTC date window closed")
+    data=Path("diverse-input/snapshot.json").read_bytes()
+    digest=hashlib.sha256(data).hexdigest()
+    if digest!=os.environ.get("NOSTREAM_DIVERSE_SNAPSHOT_SHA256"):
+        raise f.StopBudget("snapshot hash mismatch")
+    doc=json.loads(data)
+    if doc["case"]!=case or doc["observation_cutoff"]!=ev.CUTOFF:
+        raise f.StopBudget("snapshot manifest mismatch")
+    if not doc["retrieved_at"].startswith("2026-11-25T"):
+        raise f.StopBudget("snapshot vintage mismatch")
+    rows=doc["observations"]
+    if not rows or any(r[0]>ev.CUTOFF or not math.isfinite(r[1]) for r in rows):
+        raise f.StopBudget("invalid observations")
+    # Data units must be explicit; D02 is an index, not a percent-change series.
+    units={"D01":"percent, seasonally adjusted U-3","D02":"seasonally adjusted final demand price index level (calculate monthly percentage change from successive months)","D03":"count of earthquakes magnitude >=6 per UTC month","D04":"percent, daily 10-year constant maturity yield","D05":"observed monthly sunspot number","D06":"USD per EUR, ECB daily reference rate"}
+    evidence="Public source "+case["source"]+"; observation units: "+units[DIVERSE_CASE]+"; retrieved "+doc["retrieved_at"]+". Observations (period, value): "+json.dumps(rows,separators=(",",":"))
+    return ev.build_question(case),evidence,digest
+
 def bounded_direct_request(role,prompt,rec):
     # A successful response is never repeated. Only explicit transient 503 on
     # this exact free Gemma role may retry; no model or provider fallback.
     start=time.monotonic()
     rec["dispatches"]=[]
     for index in range(1+(len(GEM_RETRY_DELAYS) if role==GEM else 0)):
+        admit_diverse_dispatch(role)
         attempt={"number":index+1,"issued_at":datetime.now(timezone.utc).isoformat()}
         rec["dispatches"].append(attempt)
         try:
@@ -229,18 +271,23 @@ def validate_g2(report,question,degradation,err,before,after):
         quota_ok=quota["limit"]==f.quota_start["limit"] and quota["used"]>=f.quota_start["used"] and f.quota_day==datetime.now(timezone.utc).date().isoformat()
     except f.StopBudget:quota_ok=False
     passed=(set(members)==set(ROSTER) and len(nem)==1 and set(direct)=={GPT,GEM} and len(hashes)==1 and bool(NEM_TYPED) and agg_ok and degradation==0 and err is None and quota_ok and not f.stopped and before.get("usage")==after.get("usage")==0)
-    summary={"candidate":"F2","gate":"G2","question_type":QUESTION_TYPE,"source_sha":f.PIN,"members":members,"report":value,"aggregation_verified":agg_ok,"numeric_independent_recomputation":False if QUESTION_TYPE=="numeric" else None,"strict_block_valid":{NEM:NEM_TYPED.get("strict_block_valid"),**{role:r.get("strict_block_valid") for role,r in direct.items()}},"common_prompt":len(hashes)==1,"degradation":degradation,"engine_error":err,"technical_pipeline_pass":passed,"openrouter_after":after,"openrouter_cost_usd":sum(float(r["cost"]) for r in f.ledger if r.get("cost") is not None),"direct_billing_independently_verified":False,"published":0,"research_scope":"public BLS only","attempts":len(f.attempted)+sum(len(r.get("dispatches",[])) for r in DIRECT)}
+    attempts=len(f.attempted)+sum(len(r.get("dispatches",[])) for r in DIRECT)
+    if DIVERSE_CASE:passed=passed and attempts<=5 and len(DIRECT_DISPATCHES)==attempts-len(f.attempted) and len(f.attempted)==1
+    summary={"case_id":DIVERSE_CASE or None,"snapshot_sha256":DIVERSE_SNAPSHOT_SHA,"owner_no_recharge_attested":bool(DIVERSE_CASE),"candidate":"F2","gate":"G2","question_type":QUESTION_TYPE,"source_sha":f.PIN,"members":members,"report":value,"aggregation_verified":agg_ok,"numeric_independent_recomputation":False if QUESTION_TYPE=="numeric" else None,"strict_block_valid":{NEM:NEM_TYPED.get("strict_block_valid"),**{role:r.get("strict_block_valid") for role,r in direct.items()}},"common_prompt":len(hashes)==1,"degradation":degradation,"engine_error":err,"technical_pipeline_pass":passed,"openrouter_after":after,"openrouter_cost_usd":sum(float(r["cost"]) for r in f.ledger if r.get("cost") is not None),"direct_billing_independently_verified":False,"published":0,"research_scope":"public frozen diverse snapshot" if DIVERSE_CASE else "public BLS only","attempts":attempts}
     (OUT/"g2-summary.json").write_text(json.dumps(summary,sort_keys=True))
     (OUT/"g2-aggregations.json").write_text(json.dumps(AGGREGATIONS,sort_keys=True))
     print("G2_RESULT="+json.dumps(summary,sort_keys=True),flush=True)
     if not passed:raise SystemExit("BLOCK: G2 typed integration incomplete")
 
 async def main():
-    global closing
+    global closing,DIVERSE_SNAPSHOT_SHA
     f.assert_no_platform_credentials()
     if os.getenv("NOSTREAM_F2_AUTHORIZED")!="true":raise f.StopBudget("F2 not authorized")
     if os.getenv("NOSTREAM_CEREBRAS_TRIAL_AUTHORIZED")!="true" or not all(os.getenv(k) for k in ("GEMINI_API_KEY","CEREBRAS_API_KEY")):
         raise f.StopBudget("direct credentials or trial attestation absent")
+    if DIVERSE_CASE:
+        q,evidence,DIVERSE_SNAPSHOT_SHA=load_diverse_input()
+        (OUT/"snapshot.sha256").write_text(DIVERSE_SNAPSHOT_SHA)
     before=f.get_meta("/key");credits=f.get_meta("/credits")
     print("F2_OPENROUTER_BEFORE="+json.dumps({"key":before,"credits":credits}),flush=True)
     if before.get("is_free_tier") is not True or before.get("usage")!=0 or credits.get("total_credits")!=0 or credits.get("total_usage")!=0:raise f.StopBudget("OpenRouter account mismatch")
@@ -256,13 +303,14 @@ async def main():
         with f.OPENER.open(urllib.request.Request(url,headers=headers),timeout=20) as r:meta=json.load(r)
         if provider=="cerebras" and meta.get("id")!=model:raise f.StopBudget("Cerebras identity")
         if provider=="google" and (meta.get("name")!="models/"+model or meta.get("outputTokenLimit",0)<24576 or "generateContent" not in meta.get("supportedGenerationMethods",[])):raise f.StopBudget("Gemma capability")
-    q=f.BinaryQuestion(question_text="Will US CPI-U inflation for December 2026 be at least 3.0% year over year?",id_of_question=990002,id_of_post=990002,background_info="BLS all-items CPI-U US city average not seasonally adjusted.",resolution_criteria="YES if first BLS release for December 2026 reports all-items 12-month inflation of at least 3.0%; otherwise NO. Source https://www.bls.gov/news.release/cpi.htm",fine_print="Use initial release. Synthetic local noncontest question.",open_time=datetime.now(timezone.utc)-timedelta(days=1),scheduled_resolution_time=datetime(2027,2,1,tzinfo=timezone.utc))
-    if G2:q=build_question()
-    src="https://api.bls.gov/publicAPI/v1/timeseries/data/CUUR0000SA0"
-    rows=f.request(src)["Results"]["series"][0]["data"]
-    rows=[x for x in rows if (int(x["year"]),x["period"])<(2026,"M12") and x["period"]!="M13"][:24]
-    assert len(rows)>=12
-    evidence="Official BLS data "+src+"\n"+json.dumps(rows)
+    if not DIVERSE_CASE:
+        q=f.BinaryQuestion(question_text="Will US CPI-U inflation for December 2026 be at least 3.0% year over year?",id_of_question=990002,id_of_post=990002,background_info="BLS all-items CPI-U US city average not seasonally adjusted.",resolution_criteria="YES if first BLS release for December 2026 reports all-items 12-month inflation of at least 3.0%; otherwise NO. Source https://www.bls.gov/news.release/cpi.htm",fine_print="Use initial release. Synthetic local noncontest question.",open_time=datetime.now(timezone.utc)-timedelta(days=1),scheduled_resolution_time=datetime(2027,2,1,tzinfo=timezone.utc))
+        if G2:q=build_question()
+        src="https://api.bls.gov/publicAPI/v1/timeseries/data/CUUR0000SA0"
+        rows=f.request(src)["Results"]["series"][0]["data"]
+        rows=[x for x in rows if (int(x["year"]),x["period"])<(2026,"M12") and x["period"]!="M13"][:24]
+        assert len(rows)>=12
+        evidence="Official BLS data "+src+"\n"+json.dumps(rows)
     (OUT/"evidence.sha256").write_text(hashlib.sha256(evidence.encode()).hexdigest())
     async def research(question):return evidence
     models=[f.GeneralLlm(model=m,allowed_tries=1) for m in ROSTER]

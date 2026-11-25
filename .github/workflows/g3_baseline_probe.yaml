@@ -1,0 +1,58 @@
+name: G3 zero-inference reference probes
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/g3_baseline_probe.yaml']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  baseline:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        include:
+          - case_id: D01
+            question_type: binary
+            evidence_run: 45522593032
+            snapshot_sha256: 25abefef6ef13f8346a5669cc52e52981867f5e9a58215606daa167e67a74815
+          - case_id: D02
+            question_type: multiple_choice
+            evidence_run: 45520535838
+            snapshot_sha256: 26bbb1fd280179316d7a358e9eb401a29498d8b7cfc860d4ccaac1f1aa86abc4
+          - case_id: D03
+            question_type: numeric
+            evidence_run: 45522593032
+            snapshot_sha256: c69d9bba0dd7f22761d0788188926368935ab79f0b993202ed7020cbe1f16804
+          - case_id: D04
+            question_type: numeric
+            evidence_run: 45520535838
+            snapshot_sha256: 319a2d90575a77643283824c379ac386053aef350eaa5f64641dee5deaa935f5
+          - case_id: D05
+            question_type: multiple_choice
+            evidence_run: 45520535838
+            snapshot_sha256: 320b3e7a322aa5b4831778f959b4b260ae45ca0ff1fbfe0b0a0cbdf5d8061721
+          - case_id: D06
+            question_type: binary
+            evidence_run: 45520535838
+            snapshot_sha256: 1d8421df4bf505688db85cbbc645ec5a60c47240bcfb81c04a62eb6424f4248c
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: diverse-${{ matrix.case_id }}-snapshot
+          run-id: ${{ matrix.evidence_run }}
+          github-token: ${{ github.token }}
+          path: evidence
+      - name: Build statistical references without models or outcomes
+        run: python3 research/g3_baseline_probe.py evidence/snapshot.json "${{ matrix.case_id }}" "${{ matrix.snapshot_sha256 }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: statistical-reference-${{ matrix.case_id }}
+          path: baseline-receipt.json
+          if-no-files-found: error

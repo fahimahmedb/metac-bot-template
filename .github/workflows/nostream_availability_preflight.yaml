@@ -1,4 +1,4 @@
-name: F2 availability metadata only
+name: F2 distinct alternative routes metadata only
 on:
   push:
     branches: [research/historical-blind-calibration]
@@ -13,7 +13,7 @@ jobs:
       fail-fast: false
       max-parallel: 3
       matrix:
-        provider: [openrouter, google, direct]
+        provider: [openrouter]
     steps:
       - name: Read provider metadata without generation
         env:
@@ -52,7 +52,7 @@ jobs:
                   out[endpoint]={k:d[k] for k in ("is_free_tier","usage","total_credits","total_usage","free_model_daily_requests") if k in d}
               catalog=get(base+"/models").get("data",[])
               out["free_catalog"]=[{"id":m["id"],"context":m.get("context_length"),"max_completion":m.get("top_provider",{}).get("max_completion_tokens")} for m in catalog if m.get("id","").endswith(":free") and zero(m.get("pricing",{}))]
-              models=["google/gemma-4-26b-a4b-it:free","google/gemma-4-31b-it:free","baidu/ernie-5.5-flash-preview:free"]
+              models=["particle-ai/particle-1:free","recursive/flint-v1.0:free","inclusionai/ling-3.2-flash:free","nvidia/nemotron-3.5-super-vl:free"]
               out["exact_endpoints"]=[]
               for model in models:
                   d=get(base+"/models/"+model+"/endpoints","Authorization","Bearer "+key)

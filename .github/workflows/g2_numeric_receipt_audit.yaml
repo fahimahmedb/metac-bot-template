@@ -1,0 +1,29 @@
+name: G2 independent numeric receipt audit
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/g2_numeric_receipt_audit.yaml']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        case: [D03, D04]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: nostream-diverse-${{ matrix.case }}-evidence
+          run-id: 45522739596
+          github-token: ${{ github.token }}
+          path: evidence
+      - name: Independent arithmetic and tamper challenge
+        run: python3 research/g2_numeric_receipt_audit.py evidence/g2-summary.json "${{ matrix.case }}"

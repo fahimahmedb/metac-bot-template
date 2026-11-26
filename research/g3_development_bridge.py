@@ -10,6 +10,8 @@ import nostream_free_f3 as f3
 import g3_bls_resolution as bls
 import g3_eurostat_development as eu
 import g2_diverse_evidence as ev
+import g3_eurostat_country_development as countries
+import g3_cross_domain_development as cross
 
 SPECS={
  ("bls","cpi"):(991001,"Will US seasonally adjusted CPI-U all-items increase by at least 0.3% in January 2027 relative to December 2026?"),
@@ -19,6 +21,18 @@ SPECS={
  ("eurostat","retail"):(991005,"Will the French seasonally and calendar adjusted retail sales volume index increase by at least 0.5% in January 2027 relative to December 2026?"),
  ("eurostat","unemployment"):(991006,"Will the French seasonally adjusted unemployment rate rise by at least 0.1 percentage point in January 2027 relative to December 2026?")
 }
+COUNTRY_NAMES={"DE":"Germany","ES":"Spain","IT":"Italy","NL":"the Netherlands","PL":"Poland","SE":"Sweden"}
+for i,(c,name) in enumerate(COUNTRY_NAMES.items()):
+    SPECS[("country",c+":hicp")]=(991010+i*3,f"Will the all-items HICP monthly rate of change in {name} for January 2027 be at least 0.3%?")
+    SPECS[("country",c+":retail")]=(991011+i*3,f"Will the seasonally and calendar adjusted retail sales volume index in {name} increase by at least 0.5% in January 2027 relative to December 2026?")
+    SPECS[("country",c+":unemployment")]=(991012+i*3,f"Will the seasonally adjusted unemployment rate in {name} rise by at least 0.1 percentage point in January 2027 relative to December 2026?")
+SPECS.update({
+    ("cross","nao"):(991030,"Will the NOAA CPC monthly North Atlantic Oscillation index for January 2027 be at least zero?"),
+    ("cross","oil"):(991031,"Will US commercial crude oil stocks excluding the Strategic Petroleum Reserve for the week ending January 15, 2027 be at least one million barrels lower than for January 8, 2027?"),
+    ("cross","river"):(991032,"Will the complete seven-day mean daily discharge at USGS Potomac River Little Falls station 01646500 for January 11 through January 17, 2027 be at least 10,000 cubic feet per second?")
+})
+require_unique_qids=len({v[0] for v in SPECS.values()})==len(SPECS)
+if not require_unique_qids:raise ValueError("duplicate local question IDs")
 MOCK={f3.NEM:.2,f3.GPT:.5,f3.ERNIE:.8}
 def require(ok,msg):
     if not ok:raise ValueError(msg)
@@ -39,11 +53,24 @@ def prepare(family,key,root,expected):
         frozen=json.loads((root/"definition"/"eurostat-definition.json").read_bytes())
         rows=json.loads(report)["rows"];source_hash=sha(raw)
         units=json.dumps(eu.SPECS[key]["filters"],sort_keys=True)
+    elif family=="country":
+        c,k=key.split(":")
+        receipt=countries.prepare(c,root/"source")["results"][k]
+        frozen=json.loads((root/"definition"/"country-definition.json").read_bytes())["results"][k]
+        doc=json.loads((root/"source"/"country-result.json").read_bytes())["reports"][k]
+        rows=doc["rows"];source_hash=sha((root/"source"/f"{c}-{k}-source.json").read_bytes())
+        units=json.dumps(doc["spec"]["filters"],sort_keys=True)
+    elif family=="cross":
+        raw=(root/"source"/"cross-domain.json").read_bytes()
+        receipt=cross.prepare(key,raw)
+        frozen=json.loads((root/"definition"/"cross-domain-definition.json").read_bytes())
+        rows=json.loads(raw)["rows"];source_hash=sha(raw)
+        units=json.dumps(json.loads(raw)["spec"],sort_keys=True)
     else:raise ValueError("unknown family")
     require(receipt==frozen and receipt["definition_sha256"]==expected,"frozen definition mismatch")
     e=receipt["definition"]
     require(e["partition"]=="development_only" and not e["confirmatory_eligible"] and not e["inference_authorized"],"authority changed")
-    require(e["forecast_before"]=="2027-01-01T00:00:00Z" and e["target_month"]=="2027-01","event window")
+    require(e["forecast_before"]=="2027-01-01T00:00:00Z" and (all(t.startswith("2027-01-") for t in e["required_periods"]) if family=="cross" else e["target_month"]=="2027-01"),"event window")
     qid,question=SPECS[(family,key)]
     criteria="YES if the exact threshold stated in the question is met using the registered official data series. Use only the first successful eligible official response on UTC "+e["capture_date_utc"]+". Use the required periods and exact published values; no backfill. Missing or inadmissible data remain unresolved. Registered definition: "+json.dumps(e,sort_keys=True,separators=(",",":"))
     case={"id":e["id"],"qid":qid,"type":"binary","question":question,"criteria":criteria,"source":e["resolution_source"],"resolve":e["capture_date_utc"]+"T23:59:59Z"}
@@ -78,7 +105,7 @@ async def run(family,key,root,expected):
     require(len(calls)==3 and {r for r,_ in calls}==set(MOCK) and len({h for _,h in calls})==1,"mock roles/prompt")
     require(x.TYPED_MEMBERS==MOCK and f3.valid_aggregation(case,q,x.TYPED_MEMBERS,x.AGGREGATIONS,value) and value==.5 and bot.alertable_count==0,"native mock aggregate")
     require(not f.attempted and not x.DIRECT,"unexpected real dispatch")
-    result={"event_id":case["id"],"local_qid":case["qid"],"definition_sha256":expected,"historical_source_sha256":source_hash,"baseline":baseline,"synthetic_members":MOCK,"synthetic_aggregate":value,"common_mock_prompt_sha256":calls[0][1],"network_blocked":True,"inference_calls":0,"published":0,"actual_outcomes_scored":0,"confirmatory_eligible":False,"live_admitted":False,"status":"NATIVE_MOCK_DEVELOPMENT_BRIDGE_PASS"}
+    result={"event_id":case["id"],"local_qid":case["qid"],"definition_sha256":expected,"historical_source_sha256":source_hash,"source_hash_scope":"archived_normalized_report" if family=="cross" else "existing_bridge_source_bytes","baseline":baseline,"synthetic_members":MOCK,"synthetic_aggregate":value,"common_mock_prompt_sha256":calls[0][1],"network_blocked":True,"inference_calls":0,"published":0,"actual_outcomes_scored":0,"confirmatory_eligible":False,"live_admitted":False,"status":"NATIVE_MOCK_DEVELOPMENT_BRIDGE_PASS"}
     Path("g3-development-bridge.json").write_text(json.dumps(result,sort_keys=True))
     print("G3_DEVELOPMENT_BRIDGE="+json.dumps(result,sort_keys=True))
 if __name__=="__main__":asyncio.run(run(*sys.argv[1:]))

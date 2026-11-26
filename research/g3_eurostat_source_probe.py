@@ -14,7 +14,7 @@ BASE="https://ec.europa.eu/eurostat/api/dissemination/statistics/1.0/data/"
 START="2024-01"
 END="2025-12"
 SPECS={
- "unemployment":{"dataset":"une_rt_m","filters":{"freq":"M","s_adj":"SA","age":"Y15-74","unit":"PC_ACT","sex":"T","geo":"FR"},"family":"FR_UNEMPLOYMENT","transform":"difference","threshold":".1"},
+ "unemployment":{"dataset":"une_rt_m","filters":{"freq":"M","s_adj":"SA","age":"TOTAL","unit":"PC_ACT","sex":"T","geo":"FR"},"family":"FR_UNEMPLOYMENT","transform":"difference","threshold":".1"},
  "retail":{"dataset":"sts_trtu_m","filters":{"freq":"M","indic_bt":"VOL_SLS","nace_r2":"G47","s_adj":"SCA","unit":"I21","geo":"FR"},"family":"FR_REAL_RETAIL","transform":"pct","threshold":".5"},
  "hicp":{"dataset":"prc_hicp_minr","filters":{"freq":"M","unit":"RCH_M","coicop18":"TOTAL","geo":"FR"},"family":"FR_HICP","transform":"level","threshold":".3"},
 }
@@ -107,7 +107,7 @@ def tests():
         except (ValueError,KeyError,TypeError):pass
         else:raise AssertionError("invalid accepted: "+change)
     q=urllib.parse.parse_qs(urllib.parse.urlsplit(url("unemployment")).query)
-    require(q["time"]==times and "sinceTimePeriod" not in q and "untilTimePeriod" not in q,"explicit bounded months")
+    require(q["time"]==times and q["age"]==["TOTAL"] and "sinceTimePeriod" not in q and "untilTimePeriod" not in q,"explicit bounded months")
     print("EUROSTAT_SOURCE_TESTS_PASS=10")
 def main(key):
     tests()

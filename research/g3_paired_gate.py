@@ -16,6 +16,7 @@ MIN_COVERAGE=.95
 MIN_GAIN=.01
 SEED=20261126
 DRAWS=10000
+SHADOW_POLICY="mean-and-median-logit-0.7-v1"
 def require(ok,msg):
     if not ok:raise ValueError(msg)
 def dt(s):
@@ -28,6 +29,13 @@ def digest(s):
 def prob(p):
     require(type(p) in (float,int) and math.isfinite(p) and .01<=p<=.99,"forecast outside registered floor")
     return float(p)
+def shadow_probabilities(members):
+    """Fixed exploratory alternatives; no outcomes or external information."""
+    require(set(members)==ROLES,"shadow role identity")
+    values=[prob(v) for v in members.values()]
+    p=statistics.median(values)
+    tempered=1/(1+math.exp(-.7*math.log(p/(1-p))))
+    return {"mean":round(statistics.mean(values),3),"median_logit_0.7":round(tempered,3)}
 def unique(rows,key):
     d={}
     for row in rows:
@@ -54,6 +62,8 @@ def evaluate(manifest,forecasts,outcomes,as_of):
     require(freeze<=cutoff and manifest["type"]=="binary" and manifest["primary"]==PRIMARY,"manifest protocol")
     require(manifest["partition"]=="confirmatory","not confirmatory")
     digest(manifest["engine_sha256"])
+    shadow=manifest.get("shadow_policy")
+    require(shadow is None or shadow==SHADOW_POLICY,"unknown shadow policy")
     events=unique(manifest["events"],"id")
     # A family can occur only once in confirmatory cohort. Correlated variants
     # of the same underlying event must not enter under different IDs.
@@ -86,7 +96,7 @@ def evaluate(manifest,forecasts,outcomes,as_of):
     due=[k for k,e in events.items() if dt(e["forecast_deadline"])<=cutoff]
     coverage=len(set(due)&set(valid))/len(due) if due else 0
     pairs=sorted(set(valid)&set(ys))
-    rows=[];preds=defaultdict(list);blocks=defaultdict(list)
+    rows=[];preds=defaultdict(list);blocks=defaultdict(list);shadow_preds=defaultdict(list);shadow_blocks=defaultdict(lambda:defaultdict(list))
     for k in pairs:
         issued,p,members=valid[k];y=ys[k]["value"];resolved=dt(ys[k]["resolved_at"])
         rows.append(Row(k,issued.date(),resolved.date(),p,y))
@@ -95,6 +105,10 @@ def evaluate(manifest,forecasts,outcomes,as_of):
         for role,v in members.items():preds[role].append(v)
         week=issued.isocalendar()
         blocks[(week.year,week.week)].append((members[PRIMARY]-y)**2-(p-y)**2)
+        if shadow:
+            for name,q in shadow_probabilities(members).items():
+                shadow_preds[name].append(q)
+                shadow_blocks[name][(week.year,week.week)].append((p-y)**2-(q-y)**2)
     metrics={k:score(rows,v) for k,v in preds.items()} if rows else {}
     interval=block_interval(blocks)
     gain=metrics[PRIMARY]["brier"]-metrics["ensemble"]["brier"] if metrics else None
@@ -111,7 +125,12 @@ def evaluate(manifest,forecasts,outcomes,as_of):
     enough=final_analysis and len(pairs)>=MIN_N and len(blocks)>=MIN_BLOCKS and coverage>=MIN_COVERAGE and resolution_coverage>=MIN_COVERAGE and paired_coverage>=MIN_COVERAGE
     passed=enough and interval is not None and gain>=MIN_GAIN and interval[0]>0 and metrics["ensemble"]["log_loss"]<=metrics[PRIMARY]["log_loss"]
     status="PASS_STATISTICAL_ONLY" if passed else "FAIL_THRESHOLD" if enough else "UNKNOWN_INSUFFICIENT_EVIDENCE"
-    return {"status":status,"registered":len(events),"due":len(due),"resolved":len(ys),"paired":len(pairs),"paired_coverage":paired_coverage,"coverage":coverage,"resolution_coverage":resolution_coverage,"final_analysis":final_analysis,"forecast_weeks":len(blocks),"metrics":metrics,"paired_brier_gain":gain,"full_cohort_gain_sensitivity_bounds":cohort_gain_bounds,"grouped_ci95":interval,"primary":PRIMARY,"inference_calls":0,"provenance_independently_verified":False,"official_futureeval_score":False,"promotion_authorized":False}
+    shadow_results={}
+    if shadow and rows:
+        for name,ps in shadow_preds.items():
+            m=score(rows,ps)
+            shadow_results[name]={"metrics":m,"gain_vs_median":metrics["ensemble"]["brier"]-m["brier"],"grouped_ci95":block_interval(shadow_blocks[name]),"status":"EXPLORATORY_ONLY","requires_new_independent_confirmation":True}
+    return {"status":status,"registered":len(events),"due":len(due),"resolved":len(ys),"paired":len(pairs),"paired_coverage":paired_coverage,"coverage":coverage,"resolution_coverage":resolution_coverage,"final_analysis":final_analysis,"forecast_weeks":len(blocks),"metrics":metrics,"paired_brier_gain":gain,"full_cohort_gain_sensitivity_bounds":cohort_gain_bounds,"grouped_ci95":interval,"primary":PRIMARY,"shadow_policy":shadow,"shadow_results":shadow_results,"inference_calls":0,"provenance_independently_verified":False,"official_futureeval_score":False,"promotion_authorized":False}
 def synthetic(n=100):
     from datetime import timedelta,timezone
     origin=datetime(2027,1,1,tzinfo=timezone.utc)
@@ -162,7 +181,18 @@ def tests():
         a["aggregate"]=a["members"]["gpt_oss"]
     weak=evaluate(mm,ff[6:],yy[6:],tt)
     require(weak["status"]=="PASS_STATISTICAL_ONLY" and weak["full_cohort_gain_sensitivity_bounds"][0]<0<weak["full_cohort_gain_sensitivity_bounds"][1],"missingness can reverse full-cohort gain")
-    print("G3_PAIRED_GATE_TESTS_PASS=18 synthetic_only=true real_resolved_events=0")
+    # Check deterministic prospective alternatives without changing the primary gate.
+    sh=shadow_probabilities({"nemotron":.18,"gpt_oss":.13,"ernie":.06})
+    require(sh=={"mean":.123,"median_logit_0.7":.209},"shadow arithmetic")
+    sm=copy.deepcopy(m);sm["shadow_policy"]=SHADOW_POLICY
+    sr=evaluate(sm,f,y,t)
+    require(sr["status"]==r["status"] and sr["metrics"]==r["metrics"] and sr["paired_brier_gain"]==r["paired_brier_gain"] and set(sr["shadow_results"])=={"mean","median_logit_0.7"},"shadow altered primary")
+    require(all(x["status"]=="EXPLORATORY_ONLY" for x in sr["shadow_results"].values()),"shadow promoted")
+    sm["shadow_policy"]="unregistered"
+    try:evaluate(sm,f,y,t)
+    except ValueError:pass
+    else:raise AssertionError("unregistered shadow policy admitted")
+    print("G3_PAIRED_GATE_TESTS_PASS=22 synthetic_only=true real_resolved_events=0")
 if __name__=="__main__":
     if sys.argv[1:]==["--test"]:tests()
     elif len(sys.argv)==5:

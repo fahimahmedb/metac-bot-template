@@ -2,7 +2,7 @@ name: F3 finite campaign receipt chain
 on:
   push:
     branches: [research/historical-blind-calibration]
-    paths: ['.github/workflows/f3_campaign_finalize.yaml']
+    paths: ['.github/workflows/f3_campaign_finalize.yaml', 'research/f3_campaign_finalize.py', 'research/g2_numeric_receipt_audit.py']
   workflow_call:
     inputs:
       cohort:

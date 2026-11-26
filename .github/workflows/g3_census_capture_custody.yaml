@@ -44,7 +44,7 @@ jobs:
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/45743246873/attempts/1/jobs?per_page=100" > evidence/jobs.json
           gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$SOURCE_ARTIFACT" > evidence/artifact.json
           gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$SOURCE_ARTIFACT/zip" > evidence/artifact.zip
-          gh api "repos/$GITHUB_REPOSITORY/actions/jobs/$SOURCE_JOB/logs" > evidence/job.log
+          gh api --allow-escape-sequences "repos/$GITHUB_REPOSITORY/actions/jobs/$SOURCE_JOB/logs" > evidence/job.log
       - run: python3 research/g3_census_capture_custody.py "${{ matrix.program }}" evidence
       - uses: actions/upload-artifact@v4
         with:

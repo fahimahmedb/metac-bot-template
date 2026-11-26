@@ -1,0 +1,37 @@
+name: G3 archived forecast-error dependence
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/g3_archive_dependence.yaml']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  dependence:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        mode: [all,three]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: aggregation-development-input
+          run-id: 45739531227
+          github-token: ${{ github.token }}
+          path: evidence
+      - name: Evaluate exact frozen development archive
+        env:
+          MODE: ${{ matrix.mode }}
+        run: python3 research/g3_archive_dependence.py evidence/development.json "$MODE"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: archive-dependence-${{ matrix.mode }}
+          path: g3-archive-dependence.json
+          if-no-files-found: error

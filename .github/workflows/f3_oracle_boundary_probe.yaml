@@ -1,0 +1,46 @@
+name: F3 Oracle existing evidence boundary (offline)
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/f3_oracle_boundary_probe.yaml']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v5
+        with:
+          repository: fahimahmedb/Quant-Trade
+          ref: 4910c22e1e48ff84d5a927e5aa54e2493354b177
+          path: qt-contract
+          sparse-checkout: research/research_os
+          persist-credentials: false
+      - name: Verify actual canonical executor and epoch identities
+        run: |
+          test "$(git -C qt-contract rev-parse HEAD)" = 4910c22e1e48ff84d5a927e5aa54e2493354b177
+          test "$(git hash-object qt-contract/research/research_os/worker_stages.py)" = 6fd34e6267d10257743f451c4422401b15e58944
+          test "$(git hash-object qt-contract/research/research_os/expansion/v2_stage_executor.py)" = c6f81b900845a49ce012ea3fcbdf50e59f5d16f5
+          test "$(git hash-object qt-contract/research/research_os/runtime/V2_ACTIVE_EPOCH.json)" = 6bff13c24c64459995b19c8e9f4f63ca76061601
+      - uses: actions/download-artifact@v4
+        with:
+          name: f3-research-os-projection
+          run-id: 45875846791
+          github-token: ${{ github.token }}
+          path: export
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --disable-pip-version-check --quiet jsonschema==4.23.0
+      - name: Execute actual stage code against a memory-only snapshot
+        run: PYTHONPATH="$PWD/qt-contract" python research/f3_oracle_boundary_probe.py qt-contract export
+      - uses: actions/upload-artifact@v4
+        with:
+          name: f3-oracle-boundary
+          path: oracle-boundary.json
+          if-no-files-found: error

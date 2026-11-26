@@ -1,4 +1,4 @@
-name: F3 Flash and sustainable GPT OSS metadata only
+name: F3 durable provider credential and model metadata
 on:
   push:
     branches: [research/historical-blind-calibration]
@@ -7,73 +7,55 @@ permissions:
   contents: read
 jobs:
   metadata:
+    if: github.run_attempt == 1
     runs-on: ubuntu-latest
     timeout-minutes: 3
     strategy:
       fail-fast: false
-      max-parallel: 3
+      max-parallel: 2
       matrix:
-        provider: [openrouter, google]
+        provider: [groq, cloudflare]
     steps:
-      - name: Read provider metadata without generation
+      - name: Presence and authenticated model metadata only
         env:
           PROVIDER: ${{ matrix.provider }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
-          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+          GROQ_API_KEY: ${{ matrix.provider == 'groq' && secrets.GROQ_API_KEY || '' }}
+          CLOUDFLARE_API_TOKEN: ${{ matrix.provider == 'cloudflare' && secrets.CLOUDFLARE_API_TOKEN || '' }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ matrix.provider == 'cloudflare' && secrets.CLOUDFLARE_ACCOUNT_ID || '' }}
         run: |
           python3 -I - <<'PY'
-          import json,os,urllib.request,urllib.error
-          from decimal import Decimal
+          import json,os,re,urllib.request,urllib.error,urllib.parse
           class NoRedirect(urllib.request.HTTPRedirectHandler):
-              def redirect_request(self,*args,**kwargs): return None
-          op=urllib.request.build_opener(NoRedirect)
-          def get(url,header=None,key=None):
-              headers={"Accept":"application/json"}
-              if header and key:headers[header]=key
-              try:
-                  with op.open(urllib.request.Request(url,headers=headers,method="GET"),timeout=20) as r:
-                      return json.loads(r.read(8_000_000))
-              except urllib.error.HTTPError as e:return {"http":e.code}
-              except Exception as e:return {"error":type(e).__name__}
-          def zero(p):
-              try:return all(k in p for k in ("prompt","completion")) and all(Decimal(str(v))==0 for v in p.values())
-              except Exception:return False
+              def redirect_request(self,*args,**kwargs):return None
           mode=os.environ["PROVIDER"]
-          out={"provider":mode,"inference_calls":0}
-          if mode=="openrouter":
-              key=os.getenv("OPENROUTER_API_KEY")
-              if not key:raise SystemExit("BLOCK missing own OpenRouter key")
-              base="https://openrouter.ai/api/v1"
-              for endpoint in ("key","credits"):
-                  d=get(base+"/"+endpoint,"Authorization","Bearer "+key).get("data",{})
-                  out[endpoint]={k:d[k] for k in ("is_free_tier","usage","total_credits","total_usage","free_model_daily_requests") if k in d}
-              catalog=get(base+"/models").get("data",[])
-              out["free_catalog"]=[{"id":m["id"],"context":m.get("context_length"),"max_completion":m.get("top_provider",{}).get("max_completion_tokens")} for m in catalog if m.get("id","").endswith(":free") and zero(m.get("pricing",{}))]
-              models=["openai/gpt-oss-120b:free"] + [m["id"] for m in out["free_catalog"] if m["id"].startswith("google/gemini-") and "flash" in m["id"]][:5]
-              out["exact_endpoints"]=[]
-              for model in models:
-                  d=get(base+"/models/"+model+"/endpoints","Authorization","Bearer "+key)
-                  data=d.get("data",{})
-                  out["exact_endpoints"].append({"requested":model,"returned":data.get("id"),"http":d.get("http"),"zero_endpoints":[e.get("tag") or e.get("provider_slug") for e in data.get("endpoints",[]) if data.get("id")==model and zero(e.get("pricing",{}))]})
-          elif mode=="google":
-              key=os.getenv("GEMINI_API_KEY")
-              if not key:raise SystemExit("BLOCK missing own Gemini key")
-              out["models"]=[]
-              for m in ("gemini-3.8-flash","gemini-3.7-flash","gemini-3.6-flash","gemini-3.1-flash-lite"):
-                  d=get("https://generativelanguage.googleapis.com/v1beta/models/"+m,"x-goog-api-key",key)
-                  out["models"].append({"requested":m,**{k:d[k] for k in ("name","inputTokenLimit","outputTokenLimit","supportedGenerationMethods","http","error") if k in d}})
-          else:
-              out["credential_presence"]={k:bool(os.getenv(k)) for k in ("GROQ_API_KEY","NVIDIA_API_KEY","CEREBRAS_API_KEY")}
+          r={"provider":mode,"inference_calls":0,"free_tier_verified":False,"live_admitted":False,"status":"BLOCK_MISSING_CREDENTIAL","metadata_requests":0}
+          if mode=="groq":
               key=os.getenv("GROQ_API_KEY")
-              if key:
-                  d=get("https://api.groq.com/openai/v1/models","Authorization","Bearer "+key)
-                  out["groq_models"]=[{"id":m.get("id"),"context":m.get("context_window"),"active":m.get("active")} for m in d.get("data",[])]
-              key=os.getenv("CEREBRAS_API_KEY")
-              if key:
-                  d=get("https://api.cerebras.ai/v1/models/gpt-oss-120b","Authorization","Bearer "+key)
-                  out["cerebras"]={k:d[k] for k in ("id","http","error") if k in d}
-          print("AVAILABILITY_METADATA="+json.dumps(out,sort_keys=True))
+              url="https://api.groq.com/openai/v1/models/openai/gpt-oss-120b"
+              expected="openai/gpt-oss-120b"
+          else:
+              key=os.getenv("CLOUDFLARE_API_TOKEN")
+              account=os.getenv("CLOUDFLARE_ACCOUNT_ID","")
+              r["account_id_present"]=bool(account)
+              if not re.fullmatch(r"[0-9a-fA-F]{32}",account):key=None
+              url="https://api.cloudflare.com/client/v4/accounts/"+account+"/ai/models/search?search="+urllib.parse.quote("gpt-oss-120b")
+              expected="@cf/openai/gpt-oss-120b"
+          r["credential_present"]=bool(os.getenv("GROQ_API_KEY" if mode=="groq" else "CLOUDFLARE_API_TOKEN"))
+          if key:
+              r["metadata_requests"]=1
+              r["status"]="BLOCK_METADATA"
+              try:
+                  req=urllib.request.Request(url,headers={"Authorization":"Bearer "+key,"Accept":"application/json"},method="GET")
+                  with urllib.request.build_opener(NoRedirect).open(req,timeout=20) as resp:
+                      raw=resp.read(2_000_001)
+                      if len(raw)>2_000_000:raise ValueError("oversize")
+                      d=json.loads(raw);r["http"]=resp.status
+                  models=[d] if mode=="groq" else d.get("result",[])
+                  if mode=="cloudflare" and d.get("success") is not True:models=[]
+                  exact=[m for m in models if m.get("id" if mode=="groq" else "name")==expected]
+                  if len(exact)==1 and exact[0].get("active",True) is not False:
+                      r["model"]=expected;r["status"]="METADATA_PASS_BILLING_UNKNOWN"
+              except urllib.error.HTTPError as e:r["http"]=e.code
+              except Exception as e:r["error_type"]=type(e).__name__
+          print("DURABLE_PROVIDER_METADATA="+json.dumps(r,sort_keys=True))
           PY

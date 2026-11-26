@@ -22,31 +22,37 @@ jobs:
       matrix:
         include:
           - case: F304
+            reference_sha256: 41e6928b01bffabeb52a86030264f35d916fd5999befb04393f7ee62efcd3414
             question_type: multiple_choice
             source: D02
             evidence_run: 45520535838
             artifact: diverse-D02-snapshot
           - case: F310
+            reference_sha256: 43a5e79e85ec931b909dd3a742bf0c4f779d909f7d8387f813edef47394a797c
             question_type: numeric
             source: treasury
             evidence_run: 45737456249
             artifact: f3-primary-treasury-F310
           - case: F306
+            reference_sha256: 6b452282a1b10183cd3f7c2c7b9c456d1bb698a0b7c199828de1b7d4034974e7
             question_type: binary
             source: D06
             evidence_run: 45520535838
             artifact: diverse-D06-snapshot
           - case: F307
+            reference_sha256: 9430e1c444dfff53da6a20e734f274a20aeda193eccda6f18f3385968d62de4c
             question_type: binary
             source: D01
             evidence_run: 45522593032
             artifact: diverse-D01-snapshot
           - case: F308
+            reference_sha256: 963df03e2f55965eeb4eadcd95272772a6fe5af2e2078eef0e4d2c496ad3ad29
             question_type: numeric
             source: D03
             evidence_run: 45522593032
             artifact: diverse-D03-snapshot
           - case: F309
+            reference_sha256: c6c2d7969e3014c7a99e7782e865bd8a6cf9619cfb2f5c1e69f257fcb6fd79ea
             question_type: multiple_choice
             source: D05
             evidence_run: 45520535838
@@ -70,7 +76,7 @@ jobs:
       - name: Install pinned engine and local adapter
         run: |
           test "$(git -C upstream rev-parse HEAD)" = "79c1d7a1192a00724646ab05c67f3b776d2d7b65"
-          cp research/nostream_runner.py research/nostream_free_f0.py research/nostream_free_f2.py research/nostream_free_f3.py research/g2_f3_treasury_snapshot.py research/g2_diverse_cases.json research/g2_diverse_evidence.py upstream/
+          cp research/nostream_runner.py research/nostream_free_f0.py research/nostream_free_f2.py research/nostream_free_f3.py research/g2_f3_treasury_snapshot.py research/g2_diverse_cases.json research/g2_diverse_evidence.py research/g3_baseline_probe.py research/historical_calibration.py research/f3_reference_freeze.py upstream/
           cd upstream
           uv sync --dev --frozen
       - uses: actions/download-artifact@v4
@@ -79,6 +85,21 @@ jobs:
           run-id: ${{ matrix.evidence_run }}
           github-token: ${{ github.token }}
           path: upstream/diverse-input
+      - uses: actions/download-artifact@v4
+        with:
+          name: frozen-f3-reference-${{ matrix.case }}
+          run-id: 45740139669
+          github-token: ${{ github.token }}
+          path: upstream/frozen-reference
+      - name: Verify pre-inference comparator identity (no real credentials)
+        working-directory: upstream
+        env:
+          OPENROUTER_API_KEY: dummy-offline
+          NOSTREAM_G2: 'true'
+          NOSTREAM_QUESTION_TYPE: ${{ matrix.question_type }}
+          NOSTREAM_F3_CASE: ${{ matrix.case }}
+          REFERENCE_SHA: ${{ matrix.reference_sha256 }}
+        run: uv run --frozen python f3_reference_freeze.py --verify frozen-reference/f3-reference.json "$REFERENCE_SHA"
       - name: One bounded F3 native event trial
         working-directory: upstream
         env:

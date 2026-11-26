@@ -1,4 +1,4 @@
-name: F3 resolution and scoring development qualification
+name: F3 resolution and scoring development qualification corrected
 on:
   push:
     branches: [research/historical-blind-calibration]

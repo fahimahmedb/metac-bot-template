@@ -1,0 +1,23 @@
+name: G3 exact synthetic temporal dependence stress
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/g3_temporal_dependence_stress.yaml','research/g3_temporal_dependence_stress.py']
+permissions:
+  contents: read
+jobs:
+  stress:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - run: |
+          git hash-object research/g3_paired_gate.py
+          python3 research/g3_temporal_dependence_stress.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: g3-temporal-dependence-report
+          path: g3-temporal-dependence-report.json
+          if-no-files-found: error

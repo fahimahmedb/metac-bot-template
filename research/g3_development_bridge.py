@@ -29,6 +29,11 @@ SPECS.update({
     ("cross","oil"):(991031,"Will US commercial crude oil stocks excluding the Strategic Petroleum Reserve for the week ending January 15, 2027 be at least one million barrels lower than for January 8, 2027?"),
     ("cross","river"):(991032,"Will the complete seven-day mean daily discharge at USGS Potomac River Little Falls station 01646500 for January 11 through January 17, 2027 be at least 10,000 cubic feet per second?")
 })
+SPECS.update({
+    ("census","M3ADV"):(991040,"Will US seasonally adjusted manufacturers' new orders for durable goods increase by at least 1% in February 2027 compared with January 2027?"),
+    ("census","BFS"):(991041,"Will US seasonally adjusted total business applications increase by at least 1% in March 2027 compared with February 2027?"),
+    ("census","FTD"):(991042,"Will the US seasonally adjusted goods and services trade balance improve by at least 1 billion US dollars in April 2027 compared with March 2027?")
+})
 require_unique_qids=len({v[0] for v in SPECS.values()})==len(SPECS)
 if not require_unique_qids:raise ValueError("duplicate local question IDs")
 MOCK={f3.NEM:.2,f3.GPT:.5,f3.ERNIE:.8}
@@ -66,6 +71,33 @@ def prepare(family,key,root,expected):
         frozen=json.loads((root/"definition"/"cross-domain-definition.json").read_bytes())
         rows=json.loads(raw)["rows"];source_hash=sha(raw)
         units=json.dumps(json.loads(raw)["spec"],sort_keys=True)
+    elif family=="census":
+        import io,zipfile
+        import g3_census_development as census
+        original=(root/"source"/"census-original-source.bin").read_bytes()
+        safe=(root/"source"/"census-public-source.zip").read_bytes()
+        spec=census.SPECS[key]
+        require(sha(original)==spec[8] and sha(safe)==spec[9],"Census archive identity")
+        with zipfile.ZipFile(io.BytesIO(safe)) as z:
+            require(set(z.namelist())=={key+"-mf.csv","README"} and len(z.namelist())==2,"Census archive members")
+            require(sha(z.read("README"))=="1794c7a4c9eb919fda96bbc8d92143d3e1ce2d4e1e0ea08d346fe09f4b29bf3c","Census README identity")
+            raw=z.read(key+"-mf.csv")
+        receipt=census.make(key,raw)
+        frozen=json.loads((root/"definition"/"census-development-definition.json").read_bytes())
+        values=census.parse(raw,key,census.HISTORY)
+        rows=[[k,str(v)] for k,v in sorted(values.items())]
+        source_hash=sha(raw);units=spec[2]
+        require(receipt==frozen and receipt["definition_sha256"]==expected,"frozen Census definition mismatch")
+        e=receipt["definition"]
+        require(e["authorization"]=="DEVELOPMENT_ONLY" and not any(e[k] for k in ("confirmatory_eligible","inference_authorized","capture_authorized","capture_provenance_verified")),"Census authority changed")
+        require(e["forecast_before"]==e["target"]+"-01T00:00:00Z" and e["comparison"]==census.prev(e["target"]) and e["capture_date_utc"]==spec[4],"Census event window")
+        qid,question=SPECS[(family,key)]
+        source="https://www.census.gov/econ_datasets/"
+        criteria="YES if the exact threshold in the question is met in the registered US Census Bureau program and data series, using the same official published vintage of the two months on UTC "+e["capture_date_utc"]+". Missing or ambiguous values remain unresolved; no backfill. Definition: "+json.dumps(e,sort_keys=True,separators=(",",":"))
+        case={"id":"census-development-"+key.lower(),"qid":qid,"type":"binary","question":question,"criteria":criteria,"source":source,"resolve":e["capture_date_utc"]+"T23:59:59Z"}
+        q=ev.build_question(case).model_copy(update={"open_time":datetime(2026,11,26,tzinfo=timezone.utc)})
+        evidence="G3_FROZEN_OBSERVATIONS definition_sha256="+expected+"; source="+source+"; units="+units+"; historical rows="+json.dumps(rows,separators=(",",":"))
+        return case,q,evidence,source_hash,receipt["reference"]
     else:raise ValueError("unknown family")
     require(receipt==frozen and receipt["definition_sha256"]==expected,"frozen definition mismatch")
     e=receipt["definition"]
@@ -105,7 +137,7 @@ async def run(family,key,root,expected):
     require(len(calls)==3 and {r for r,_ in calls}==set(MOCK) and len({h for _,h in calls})==1,"mock roles/prompt")
     require(x.TYPED_MEMBERS==MOCK and f3.valid_aggregation(case,q,x.TYPED_MEMBERS,x.AGGREGATIONS,value) and value==.5 and bot.alertable_count==0,"native mock aggregate")
     require(not f.attempted and not x.DIRECT,"unexpected real dispatch")
-    result={"event_id":case["id"],"local_qid":case["qid"],"definition_sha256":expected,"historical_source_sha256":source_hash,"source_hash_scope":"archived_normalized_report" if family=="cross" else "existing_bridge_source_bytes","baseline":baseline,"synthetic_members":MOCK,"synthetic_aggregate":value,"common_mock_prompt_sha256":calls[0][1],"network_blocked":True,"inference_calls":0,"published":0,"actual_outcomes_scored":0,"confirmatory_eligible":False,"live_admitted":False,"status":"NATIVE_MOCK_DEVELOPMENT_BRIDGE_PASS"}
+    result={"event_id":case["id"],"local_qid":case["qid"],"definition_sha256":expected,"historical_source_sha256":source_hash,"source_hash_scope":"archived_normalized_report" if family=="cross" else "pinned_census_csv_member" if family=="census" else "existing_bridge_source_bytes","baseline":baseline,"synthetic_members":MOCK,"synthetic_aggregate":value,"common_mock_prompt_sha256":calls[0][1],"network_blocked":True,"inference_calls":0,"published":0,"actual_outcomes_scored":0,"confirmatory_eligible":False,"live_admitted":False,"status":"NATIVE_MOCK_DEVELOPMENT_BRIDGE_PASS"}
     Path("g3-development-bridge.json").write_text(json.dumps(result,sort_keys=True))
     print("G3_DEVELOPMENT_BRIDGE="+json.dumps(result,sort_keys=True))
 if __name__=="__main__":asyncio.run(run(*sys.argv[1:]))

@@ -1,0 +1,70 @@
+name: G3 six-country Eurostat candidate expansion
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/g3_eurostat_country_expansion.yaml']
+permissions:
+  contents: read
+jobs:
+  country:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        country: [DE,ES,IT,NL,PL,SE]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Qualify exactly three already-defined indicators in new geography
+        env:
+          COUNTRY: ${{ matrix.country }}
+        run: python3 research/g3_eurostat_country_expansion.py "$COUNTRY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eurostat-country-${{ matrix.country }}
+          path: |
+            country-result.json
+            ${{ matrix.country }}-*-source.json
+          if-no-files-found: error
+  reconcile:
+    needs: country
+    if: always() && github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: eurostat-country-*
+          path: incoming
+      - name: Report qualified and blocked series, with dependency labels
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          qualified=[];blocked=[]
+          for c in ("DE","ES","IT","NL","PL","SE"):
+              p=Path("incoming")/("eurostat-country-"+c)/"country-result.json"
+              if not p.exists():
+                  blocked.extend({"country":c,"indicator":k,"reason":"missing country receipt"} for k in ("unemployment","retail","hicp"))
+                  continue
+              d=json.loads(p.read_bytes())
+              assert d["country"]==c and d["inference_calls"]==0
+              for k,r in d["reports"].items():
+                  assert r["spec"]["filters"]["geo"]==c and r["confirmatory_eligible"] is False and r["outcomes_accessed"]==0
+                  qualified.append({"country":c,"indicator":k,"family":r["family"],"baseline":r["baseline"],"source_sha256":r["source_sha256"],"dependency_groups":["EU_MACRO",c,k]})
+              blocked.extend({"country":c,"indicator":k,**v} for k,v in d["blocked"].items())
+          assert len(qualified)+len(blocked)==18 and len({r["family"] for r in qualified})==len(qualified)
+          out={"qualified":qualified,"blocked":blocked,"confirmatory_pairs":0,"independent_events_claimed":False,"inference_calls":0}
+          Path("country-expansion-final.json").write_text(json.dumps(out,sort_keys=True))
+          print("COUNTRY_EXPANSION_FINAL="+json.dumps(out,sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eurostat-country-expansion-final
+          path: country-expansion-final.json
+          if-no-files-found: error

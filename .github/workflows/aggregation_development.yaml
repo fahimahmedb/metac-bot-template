@@ -1,4 +1,4 @@
-name: Archived aggregation development experiment
+name: Archived aggregation development experiment — new snapshot
 on:
   push:
     branches: [research/historical-blind-calibration]
@@ -15,12 +15,13 @@ jobs:
       - uses: actions/checkout@v5
         with:
           persist-credentials: false
-      - name: Retrieve licensed immutable-by-hash archive
+      - name: Capture current licensed archive as distinct development snapshot
         run: |
           curl --fail --location --max-time 300 --max-filesize 300000000 https://www.forecastbench.org/assets/data/processed-forecast-sets/processed_forecast_sets.tar.gz -o /tmp/forecastbench.tar.gz
-          echo '3b3b9630f2ccf4da401e703266a116cdc7de535eabb4cb44c9a10d1c01315b0f  /tmp/forecastbench.tar.gz' | sha256sum -c -
+          sha256sum /tmp/forecastbench.tar.gz | tee /tmp/archive.sha256
+          stat -c 'ARCHIVE_BYTES=%s' /tmp/forecastbench.tar.gz
       - name: Reuse existing reader and extract development-only ballots
-        run: python3 research/aggregation_development.py prepare /tmp/forecastbench.tar.gz development.json
+        run: python3 research/aggregation_development.py prepare /tmp/forecastbench.tar.gz development.json "$(cut -d' ' -f1 /tmp/archive.sha256)"
       - uses: actions/upload-artifact@v4
         with:
           name: aggregation-development-input
@@ -77,4 +78,5 @@ jobs:
                   reports[mode]=r
           print("AGGREGATION_CONSOLIDATED="+json.dumps({"reports":{m:{"decision":r["decision"],"chosen":r["chosen_on_earlier_development"],"gain":r["later_development_gain"]} for m,r in reports.items()},"complete":len(reports)==2,"f3_skill":"UNKNOWN","promotion_authorized":False,"inference_calls":0}))
           assert len(reports)==2,"incomplete experiment"
+          assert len({r["archive_sha256"] for r in reports.values()})==1,"archive mismatch"
           PY

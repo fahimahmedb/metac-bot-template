@@ -27,6 +27,7 @@ jobs:
         with:
           name: census-bulk-${{ matrix.program }}
           path: |
+            census-original-source.bin
             census-public-source.zip
             census-source-receipt.json
           if-no-files-found: error
@@ -50,8 +51,9 @@ jobs:
               try:
                   p=Path("incoming")/("census-bulk-"+k)
                   d=json.loads((p/"census-source-receipt.json").read_text())
-                  raw=(p/"census-public-source.zip").read_bytes()
-                  if d["program"]!=k or hashlib.sha256(raw).hexdigest()!=d["archive_sha256"] or d["inference_calls"]!=0 or d["actual_outcomes_accessed"]!=0 or d["confirmatory_eligible"] is not False:
+                  raw=(p/"census-original-source.bin").read_bytes()
+                  safe=(p/"census-public-source.zip").read_bytes()
+                  if d["program"]!=k or hashlib.sha256(raw).hexdigest()!=d["archive_sha256"] or hashlib.sha256(safe).hexdigest()!=d["normalized_archive_sha256"] or d["inference_calls"]!=0 or d["actual_outcomes_accessed"]!=0 or d["confirmatory_eligible"] is not False:
                       raise ValueError("receipt")
                   reports[k]=d
               except (OSError,ValueError,KeyError,TypeError):

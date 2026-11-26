@@ -23,7 +23,12 @@ def require(ok,msg):
 def digest(raw):return hashlib.sha256(raw).hexdigest()
 def url(key):
     s=SPECS[key]
-    return BASE+s["dataset"]+"?"+urllib.parse.urlencode({"lang":"EN",**s["filters"],"sinceTimePeriod":START,"untilTimePeriod":END})
+    query={"lang":"EN",**s["filters"],"sinceTimePeriod":START,"untilTimePeriod":END}
+    if key=="unemployment":
+        # Explicit time positions avoid admitting a broader response. Keep
+        # exactly the original range and the same frozen threshold.
+        query={"lang":"EN",**s["filters"],"time":[f"{y}-{m:02d}" for y in (2024,2025) for m in range(1,13)]}
+    return BASE+s["dataset"]+"?"+urllib.parse.urlencode(query,doseq=True)
 def positions(category,size):
     ix=category["index"]
     require(isinstance(ix,(dict,list)),"invalid category index")
@@ -40,7 +45,7 @@ def parse(key,raw):
     obj=json.loads(raw,parse_float=Decimal)
     ids=obj["id"];sizes=obj["size"];dim=obj["dimension"];filters=SPECS[key]["filters"]
     require(obj.get("class")=="dataset" and set(ids)==set(filters)|{"time"} and len(ids)==len(set(ids))==len(sizes),"unexpected dimensions")
-    require(all(type(n) is int and n>0 for n in sizes) and math.prod(sizes)<=24,"response exceeds historical bound")
+    require(all(type(n) is int and n>0 for n in sizes) and math.prod(sizes)<=24,"response exceeds historical bound; dimensions="+str(list(zip(ids,sizes))))
     require(obj.get("source") in ("ESTAT","Eurostat"),"source attribution")
     axes={d:positions(dim[d]["category"],n) for d,n in zip(ids,sizes,strict=True)}
     require(all(axes[d]==[v] for d,v in filters.items()),"wrong series identity")
@@ -101,7 +106,9 @@ def tests():
         try:parse("unemployment",enc(d))
         except (ValueError,KeyError,TypeError):pass
         else:raise AssertionError("invalid accepted: "+change)
-    print("EUROSTAT_SOURCE_TESTS_PASS=9")
+    q=urllib.parse.parse_qs(urllib.parse.urlsplit(url("unemployment")).query)
+    require(q["time"]==times and "sinceTimePeriod" not in q and "untilTimePeriod" not in q,"explicit bounded months")
+    print("EUROSTAT_SOURCE_TESTS_PASS=10")
 def main(key):
     tests()
     require(key in SPECS,"unknown candidate")

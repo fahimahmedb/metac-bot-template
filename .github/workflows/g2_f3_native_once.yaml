@@ -1,4 +1,4 @@
-name: F3 native three-format pilot
+name: F3 native three-format pilot corrected MC validator
 on:
   push:
     branches: [research/historical-blind-calibration]

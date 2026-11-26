@@ -38,3 +38,5 @@ jobs:
             test "$ADMISSION" = failure && test "$PROTECTED" = skipped
           fi
           echo "F3_PROBE_RECEIPT_PASS number=$GITHUB_RUN_NUMBER attempt=$GITHUB_RUN_ATTEMPT admission=$ADMISSION protected=$PROTECTED"
+
+# Deliberate second distinct push: prove the same workflow identity denies a new run.

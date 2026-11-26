@@ -1,0 +1,87 @@
+name: F3 finite campaign receipt chain
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/f3_campaign_finalize.yaml']
+  workflow_call:
+    inputs:
+      cohort:
+        type: string
+        required: true
+      source_run:
+        type: string
+        required: true
+      source_head:
+        type: string
+        required: true
+permissions:
+  contents: read
+  actions: read
+env:
+  COHORT: ${{ inputs.cohort || 'pilot' }}
+  SOURCE_RUN: ${{ inputs.source_run || '45733982405' }}
+  SOURCE_HEAD: ${{ inputs.source_head || '3459896cbd0d89f4274e527b5a5ced1fcff55993' }}
+jobs:
+  audit:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        case: ${{ fromJSON(inputs.cohort == 'diverse' && '["F304","F310","F306","F307","F308","F309"]' || '["F301","F302","F303"]') }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Obtain source run and job identities
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN" > run.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN/attempts/1/jobs?per_page=100" > jobs.json
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: ${{ inputs.cohort == 'diverse' && format('f3-diverse-{0}-receipt', matrix.case) || format('f3-native-{0}-receipt', matrix.case) }}
+          run-id: ${{ env.SOURCE_RUN }}
+          github-token: ${{ github.token }}
+          path: evidence
+      - name: Verify terminal receipt and independently reconstruct aggregate
+        env:
+          CASE: ${{ matrix.case }}
+        run: python3 research/f3_campaign_finalize.py audit "$CASE" "$COHORT" "$SOURCE_RUN" "$SOURCE_HEAD" run.json jobs.json evidence
+      - uses: actions/upload-artifact@v4
+        with:
+          name: audit-${{ matrix.case }}
+          path: audit.json
+          if-no-files-found: error
+  reconcile:
+    needs: audit
+    if: always() && github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: audit-F*
+          path: incoming
+      - name: Consolidate terminal evidence, even when a matrix job fails
+        run: |
+          mkdir -p audits
+          for d in incoming/audit-F*; do
+            if test -d "$d"; then mv "$d" "audits/${d##*/audit-}"; fi
+          done
+          python3 research/f3_campaign_finalize.py --test
+          python3 research/f3_campaign_finalize.py consolidate "$COHORT" "$SOURCE_RUN" "$SOURCE_HEAD" audits
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: f3-campaign-final
+          path: campaign-final.json
+          if-no-files-found: error

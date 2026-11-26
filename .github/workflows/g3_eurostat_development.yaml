@@ -1,0 +1,80 @@
+name: G3 Eurostat frozen development definitions (offline)
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/g3_eurostat_development.yaml']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  definition:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include:
+          - candidate: hicp
+            source_run: 45741079382
+          - candidate: retail
+            source_run: 45741079382
+          - candidate: unemployment
+            source_run: 45741286536
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: eurostat-${{ matrix.candidate }}
+          run-id: ${{ matrix.source_run }}
+          github-token: ${{ github.token }}
+          path: evidence
+      - name: Qualify exact source baseline and synthetic capture arithmetic
+        env:
+          CANDIDATE: ${{ matrix.candidate }}
+        run: python3 research/g3_eurostat_development.py "$CANDIDATE" evidence
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eurostat-definition-${{ matrix.candidate }}
+          path: eurostat-definition.json
+          if-no-files-found: error
+  reconcile:
+    needs: definition
+    if: always() && github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: eurostat-definition-*
+          path: incoming
+      - name: Preserve successful definitions and local blockers
+        run: |
+          python3 - <<'PY'
+          import json,hashlib
+          from pathlib import Path
+          reports={};blocked=[]
+          for k in ("hicp","retail","unemployment"):
+              try:
+                  d=json.loads((Path("incoming")/("eurostat-definition-"+k)/"eurostat-definition.json").read_bytes())
+                  e=d["definition"]
+                  if e["candidate"]!=k or d["definition_sha256"]!=hashlib.sha256(json.dumps(e,sort_keys=True,separators=(",",":"),allow_nan=False).encode()).hexdigest() or e["confirmatory_eligible"] is not False or e["capture_authorized"] is not False or e["inference_authorized"] is not False or d["inference_calls"]!=0 or d["actual_outcomes_accessed"]!=0:
+                      raise ValueError("definition mismatch")
+                  reports[k]=d
+              except (OSError,ValueError,KeyError,TypeError):
+                  blocked.append(k)
+          result={"status":"DEVELOPMENT_DEFINITIONS_READY" if not blocked else "PARTIAL_BLOCK","reports":reports,"blocked":blocked,"confirmatory_pairs":0,"actual_outcomes_accessed":0,"inference_calls":0,"automatic_capture_authorized":False}
+          Path("eurostat-definitions-final.json").write_text(json.dumps(result,sort_keys=True))
+          print("EUROSTAT_DEFINITIONS_FINAL="+json.dumps(result,sort_keys=True))
+          if blocked:raise SystemExit(1)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eurostat-definitions-final
+          path: eurostat-definitions-final.json
+          if-no-files-found: error

@@ -1,0 +1,34 @@
+name: G3 actual candidate horizon feasibility (offline)
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/g3_portfolio_horizon.yaml']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  horizon:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: g3-portfolio-readiness
+          run-id: 45742754019
+          github-token: ${{ github.token }}
+          path: early
+      - uses: actions/download-artifact@v4
+        with:
+          name: census-development-final
+          run-id: 45743772441
+          github-token: ${{ github.token }}
+          path: census
+      - run: python3 research/g3_portfolio_horizon.py early/g3-portfolio-readiness.json census/census-development-final.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: g3-portfolio-horizon
+          path: g3-portfolio-horizon.json
+          if-no-files-found: error

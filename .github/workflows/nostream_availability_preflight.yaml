@@ -1,4 +1,4 @@
-name: F2 distinct alternative routes metadata only
+name: F3 Flash and sustainable GPT OSS metadata only
 on:
   push:
     branches: [research/historical-blind-calibration]
@@ -13,7 +13,7 @@ jobs:
       fail-fast: false
       max-parallel: 3
       matrix:
-        provider: [openrouter]
+        provider: [openrouter, google]
     steps:
       - name: Read provider metadata without generation
         env:
@@ -52,7 +52,7 @@ jobs:
                   out[endpoint]={k:d[k] for k in ("is_free_tier","usage","total_credits","total_usage","free_model_daily_requests") if k in d}
               catalog=get(base+"/models").get("data",[])
               out["free_catalog"]=[{"id":m["id"],"context":m.get("context_length"),"max_completion":m.get("top_provider",{}).get("max_completion_tokens")} for m in catalog if m.get("id","").endswith(":free") and zero(m.get("pricing",{}))]
-              models=["particle-ai/particle-1:free","recursive/flint-v1.0:free","inclusionai/ling-3.2-flash:free","nvidia/nemotron-3.5-super-vl:free"]
+              models=["openai/gpt-oss-120b:free"] + [m["id"] for m in out["free_catalog"] if m["id"].startswith("google/gemini-") and "flash" in m["id"]][:5]
               out["exact_endpoints"]=[]
               for model in models:
                   d=get(base+"/models/"+model+"/endpoints","Authorization","Bearer "+key)
@@ -62,7 +62,7 @@ jobs:
               key=os.getenv("GEMINI_API_KEY")
               if not key:raise SystemExit("BLOCK missing own Gemini key")
               out["models"]=[]
-              for m in ("gemma-4-26b-a4b-it","gemma-4-31b-it"):
+              for m in ("gemini-3.8-flash","gemini-3.7-flash","gemini-3.6-flash","gemini-3.1-flash-lite"):
                   d=get("https://generativelanguage.googleapis.com/v1beta/models/"+m,"x-goog-api-key",key)
                   out["models"].append({"requested":m,**{k:d[k] for k in ("name","inputTokenLimit","outputTokenLimit","supportedGenerationMethods","http","error") if k in d}})
           else:

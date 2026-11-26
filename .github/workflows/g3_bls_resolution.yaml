@@ -1,0 +1,75 @@
+name: G3 BLS development definitions and resolution receipt qualification
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/g3_bls_resolution.yaml', 'research/g3_bls_resolution.py']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  definition:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        candidate: [cpi,payroll,openings]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: g3-bls-${{ matrix.candidate }}
+          run-id: 45739662391
+          github-token: ${{ github.token }}
+          path: evidence
+      - name: Qualify frozen definition and synthetic capture rules
+        env:
+          CANDIDATE: ${{ matrix.candidate }}
+        run: python3 research/g3_bls_resolution.py "$CANDIDATE" evidence/bls-candidate.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bls-definition-${{ matrix.candidate }}
+          path: bls-definition.json
+          if-no-files-found: error
+  reconcile:
+    needs: definition
+    if: always() && github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: bls-definition-*
+          path: incoming
+      - name: Consolidate available definitions without admission
+        run: |
+          python3 - <<'PY'
+          import json,hashlib
+          from pathlib import Path
+          reports={};blocked=[]
+          for k in ("cpi","payroll","openings"):
+              try:
+                  r=json.loads((Path("incoming")/("bls-definition-"+k)/"bls-definition.json").read_bytes())
+                  e=r["definition"]
+                  digest=hashlib.sha256(json.dumps(e,sort_keys=True,separators=(",",":"),allow_nan=False).encode()).hexdigest()
+                  if e["candidate"]!=k or digest!=r["definition_sha256"] or e["confirmatory_eligible"] is not False or e["inference_authorized"] is not False or r["outcomes_accessed"]!=0 or r["inference_calls"]!=0:
+                      raise ValueError("invalid receipt")
+                  reports[k]=r
+              except (OSError,ValueError,KeyError,TypeError):
+                  blocked.append(k)
+          result={"status":"DEVELOPMENT_DEFINITIONS_READY" if not blocked else "BLOCK","reports":reports,"blocked":blocked,"confirmatory_pairs":0,"inference_calls":0,"actual_outcomes_accessed":0,"automatic_capture_authorized":False}
+          Path("bls-definitions.json").write_text(json.dumps(result,sort_keys=True))
+          print("BLS_DEFINITIONS_FINAL="+json.dumps(result,sort_keys=True))
+          if blocked:raise SystemExit(1)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bls-definitions-final
+          path: bls-definitions.json
+          if-no-files-found: error

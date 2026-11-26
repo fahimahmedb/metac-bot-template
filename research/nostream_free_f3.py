@@ -33,8 +33,9 @@ DIVERSE_SPECS={
 }
 CASE_SPECS.update(DIVERSE_SPECS)
 FEB_CASES={"F307","F308","F309"}
+TREASURY_SNAPSHOT_SHA="b8ebef5f84312adfc372716bac39a39fa1bbc8a543bd13ed78d48b202154db6a"
 CASE=os.environ["NOSTREAM_F3_CASE"]
-DAY="2026-11-27" if CASE in DIVERSE_SPECS else "2026-11-26"
+DAY="2026-11-27" if CASE in DIVERSE_SPECS or CASE=="F310" else "2026-11-26"
 OUT=Path("free-results")
 CACHE={}
 LOCK=threading.Lock()
@@ -45,6 +46,7 @@ def require(ok,msg):
     if not ok:raise f.StopBudget(msg)
 
 def input_fixture():
+    if CASE=="F310":return treasury_fixture()
     require(CASE!="F305","FRED source blocked pending permission; use primary-source replacement")
     source,digest,qid,resolve,units=CASE_SPECS[CASE]
     raw=Path("diverse-input/snapshot.json").read_bytes()
@@ -65,6 +67,18 @@ def input_fixture():
     q=q.model_copy(update={"open_time":datetime.fromisoformat(DAY).replace(tzinfo=timezone.utc)})
     evidence="Public source "+case["source"]+"; observation units: "+units+"; retrieved "+doc["retrieved_at"]+". Observations (period, value): "+json.dumps(rows,separators=(",",":"))
     return case,q,evidence,digest
+
+def treasury_fixture():
+    from g2_f3_treasury_snapshot import CASE as registered
+    raw=Path("diverse-input/snapshot.json").read_bytes()
+    require(hashlib.sha256(raw).hexdigest()==TREASURY_SNAPSHOT_SHA,"Treasury snapshot hash")
+    doc=json.loads(raw)
+    require(doc["case"]==registered and doc["observation_cutoff"]=="2026-11-24" and doc["retrieved_at"].startswith("2026-11-26T"),"Treasury snapshot provenance")
+    rows=doc["observations"]
+    require(len(rows)>=40 and rows==sorted(rows) and len({r[0] for r in rows})==len(rows) and all("2026-09-01"<=r[0]<="2026-11-24" and type(r[1]) in (int,float) and math.isfinite(r[1]) for r in rows),"Treasury evidence")
+    q=ev.build_question(registered).model_copy(update={"open_time":datetime.fromisoformat(DAY).replace(tzinfo=timezone.utc)})
+    evidence="US Treasury direct nominal 10-year par yield curve, percent; source "+registered["source"]+"; retrieved "+doc["retrieved_at"]+". Observations: "+json.dumps(rows,separators=(",",":"))
+    return registered,q,evidence,TREASURY_SNAPSHOT_SHA
 
 def configure(case):
     require(x.G2 and not x.DIVERSE_CASE and x.QUESTION_TYPE==case["type"],"wrong mode")
@@ -156,7 +170,7 @@ async def live():
     global CLOSED
     f.assert_no_platform_credentials()
     require(os.getenv("NOSTREAM_F3_LIVE_AUTHORIZED")=="true" and datetime.now(timezone.utc).date().isoformat()==DAY,"live date gate")
-    if CASE in DIVERSE_SPECS:require(os.getenv("NOSTREAM_F3_DIVERSE_AUTHORIZED")=="true","separate diverse campaign admission required")
+    if CASE in DIVERSE_SPECS or CASE=="F310":require(os.getenv("NOSTREAM_F3_DIVERSE_AUTHORIZED")=="true","separate diverse campaign admission required")
     require(os.getenv("NOSTREAM_CEREBRAS_TRIAL_AUTHORIZED")=="true" and os.getenv("NOSTREAM_CEREBRAS_NO_RECHARGE_ATTESTED")=="true","trial attestation")
     require(all(os.getenv(k) for k in ("CEREBRAS_API_KEY","GEMINI_API_KEY","OPENROUTER_API_KEY")),"missing credential")
     case,q,evidence,digest=input_fixture();configure(case)

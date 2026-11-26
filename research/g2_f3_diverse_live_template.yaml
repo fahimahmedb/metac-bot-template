@@ -115,3 +115,11 @@ jobs:
           name: f3-diverse-${{ matrix.case }}-receipt
           path: upstream/free-results/
           if-no-files-found: warn
+  finalize:
+    needs: real
+    if: always() && github.run_attempt == 1
+    uses: ./.github/workflows/f3_campaign_finalize.yaml
+    with:
+      cohort: diverse
+      source_run: ${{ format('{0}', github.run_id) }}
+      source_head: ${{ github.sha }}

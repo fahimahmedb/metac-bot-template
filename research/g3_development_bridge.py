@@ -10,8 +10,6 @@ import nostream_free_f3 as f3
 import g3_bls_resolution as bls
 import g3_eurostat_development as eu
 import g2_diverse_evidence as ev
-import g3_eurostat_country_development as countries
-import g3_cross_domain_development as cross
 
 SPECS={
  ("bls","cpi"):(991001,"Will US seasonally adjusted CPI-U all-items increase by at least 0.3% in January 2027 relative to December 2026?"),
@@ -54,6 +52,7 @@ def prepare(family,key,root,expected):
         rows=json.loads(report)["rows"];source_hash=sha(raw)
         units=json.dumps(eu.SPECS[key]["filters"],sort_keys=True)
     elif family=="country":
+        import g3_eurostat_country_development as countries
         c,k=key.split(":")
         receipt=countries.prepare(c,root/"source")["results"][k]
         frozen=json.loads((root/"definition"/"country-definition.json").read_bytes())["results"][k]
@@ -61,6 +60,7 @@ def prepare(family,key,root,expected):
         rows=doc["rows"];source_hash=sha((root/"source"/f"{c}-{k}-source.json").read_bytes())
         units=json.dumps(doc["spec"]["filters"],sort_keys=True)
     elif family=="cross":
+        import g3_cross_domain_development as cross
         raw=(root/"source"/"cross-domain.json").read_bytes()
         receipt=cross.prepare(key,raw)
         frozen=json.loads((root/"definition"/"cross-domain-definition.json").read_bytes())

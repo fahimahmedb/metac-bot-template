@@ -22,13 +22,19 @@ def inspect(raw):
     with zipfile.ZipFile(io.BytesIO(raw)) as z:
         members=z.infolist()
         require(0<len(members)<=40 and sum(x.file_size for x in members)<=30_000_000,"archive members/size")
-        require(len({x.filename for x in members})==len(members),"duplicate member")
+        # ZIPs sometimes use Windows separators. Normalize for validation
+        # only, then read by ZipInfo; no extraction or filesystem writes.
+        names=set()
         for i in members:
-            p=PurePosixPath(i.filename)
-            require(not p.is_absolute() and ".." not in p.parts and "\\" not in i.filename and not i.flag_bits&1,"archive path/encryption")
+            normalized=i.filename.replace("\\","/")
+            p=PurePosixPath(normalized)
+            require(not p.is_absolute() and ".." not in p.parts and not re.match(r"^[A-Za-z]:",normalized) and "\x00" not in normalized and not i.flag_bits&1 and (i.external_attr>>16)&0o170000!=0o120000,"unsafe member "+repr(i.filename)[:120])
+            name=str(p)
+            require(name not in names,"duplicate normalized member")
+            names.add(name)
             if i.is_dir():continue
             b=z.read(i)
-            item={"name":i.filename,"bytes":len(b),"sha256":sha(b)}
+            item={"name":i.filename,"normalized_name":name,"bytes":len(b),"sha256":sha(b)}
             # Only metadata/header previews, never observation values in logs.
             if p.suffix.lower() in (".txt",".csv",".tsv",".dat",".mf",""):
                 text=b.decode("utf-8-sig",errors="replace")
@@ -44,11 +50,12 @@ def tests():
         with zipfile.ZipFile(b,"w",zipfile.ZIP_DEFLATED) as z:z.writestr(name,"header\n2024,1\n")
         return b.getvalue()
     require(inspect(make())[0]["name"]=="sample.txt","valid archive")
-    for x in (b"bad",make("../escape.txt"),make("/absolute.txt")):
+    require(inspect(make("relative\\sample.txt"))[0]["normalized_name"]=="relative/sample.txt","relative Windows path")
+    for x in (b"bad",make("../escape.txt"),make("/absolute.txt"),make("..\\escape.txt"),make("C:\\absolute.txt"),make("\\\\server\\share.txt")):
         try:inspect(x)
         except ValueError:pass
         else:raise AssertionError("unsafe archive admitted")
-    print("CENSUS_BULK_TESTS_PASS=4")
+    print("CENSUS_BULK_TESTS_PASS=8")
 def main(key):
     tests();require(key in SPECS,"program")
     now=datetime.now(timezone.utc)

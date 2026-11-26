@@ -1,0 +1,118 @@
+name: Freeze F3 development references before inference
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/f3_reference_freeze.yaml']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  freeze:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        include:
+          - case: F304
+            question_type: multiple_choice
+            source: D02
+            evidence_run: 45520535838
+            artifact: diverse-D02-snapshot
+          - case: F310
+            question_type: numeric
+            source: treasury
+            evidence_run: 45737456249
+            artifact: f3-primary-treasury-F310
+          - case: F306
+            question_type: binary
+            source: D06
+            evidence_run: 45520535838
+            artifact: diverse-D06-snapshot
+          - case: F307
+            question_type: binary
+            source: D01
+            evidence_run: 45522593032
+            artifact: diverse-D01-snapshot
+          - case: F308
+            question_type: numeric
+            source: D03
+            evidence_run: 45522593032
+            artifact: diverse-D03-snapshot
+          - case: F309
+            question_type: multiple_choice
+            source: D05
+            evidence_run: 45520535838
+            artifact: diverse-D05-snapshot
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v5
+        with:
+          repository: No-Stream/nostreambot-metaculus-bot
+          ref: 79c1d7a1192a00724646ab05c67f3b776d2d7b65
+          path: upstream
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
+          python-version: '3.12'
+      - name: Install pinned engine and local adapter
+        run: |
+          test "$(git -C upstream rev-parse HEAD)" = "79c1d7a1192a00724646ab05c67f3b776d2d7b65"
+          cp research/nostream_runner.py research/nostream_free_f0.py research/nostream_free_f2.py research/nostream_free_f3.py research/g2_f3_treasury_snapshot.py research/g2_diverse_cases.json research/g2_diverse_evidence.py research/g3_baseline_probe.py research/historical_calibration.py research/f3_reference_freeze.py upstream/
+          cd upstream
+          uv sync --dev --frozen
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          run-id: ${{ matrix.evidence_run }}
+          github-token: ${{ github.token }}
+          path: upstream/diverse-input
+      - name: Freeze reference on same exact fixture with no model credentials
+        working-directory: upstream
+        env:
+          OPENROUTER_API_KEY: dummy-offline
+          NOSTREAM_G2: 'true'
+          NOSTREAM_QUESTION_TYPE: ${{ matrix.question_type }}
+          NOSTREAM_F3_CASE: ${{ matrix.case }}
+        run: uv run --frozen python f3_reference_freeze.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frozen-f3-reference-${{ matrix.case }}
+          path: upstream/f3-reference.json
+          if-no-files-found: error
+  consolidate:
+    needs: freeze
+    if: always() && github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: frozen-f3-reference-*
+          path: incoming
+      - name: Consolidate fixed reference manifest
+        run: |
+          python3 - <<'PY'
+          import hashlib,json
+          from pathlib import Path
+          cases=["F304","F310","F306","F307","F308","F309"]
+          result=[]
+          for c in cases:
+              raw=(Path("incoming")/("frozen-f3-reference-"+c)/"f3-reference.json").read_bytes()
+              d=json.loads(raw)
+              assert d["case"]==c and d["frozen_at"].startswith("2026-11-26T") and d["inference_calls"]==0 and d["outcomes_scored"]==0
+              result.append({"case":c,"qid":d["qid"],"definition_sha256":d["definition_sha256"],"snapshot_sha256":d["snapshot_sha256"],"reference_sha256":hashlib.sha256(raw).hexdigest(),"primary":d["primary"]})
+          doc={"references":result,"scope":"technical cohort development comparisons only","inference_calls":0,"promotion_authorized":False}
+          Path("f3-reference-manifest.json").write_text(json.dumps(doc,sort_keys=True))
+          print("F3_REFERENCE_MANIFEST="+json.dumps(doc,sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frozen-f3-reference-manifest
+          path: f3-reference-manifest.json
+          if-no-files-found: error

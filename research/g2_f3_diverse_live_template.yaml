@@ -155,3 +155,13 @@ jobs:
       cohort: diverse
       source_run: ${{ format('{0}', github.run_id) }}
       source_head: ${{ github.sha }}
+  project:
+    needs: [admission, real, finalize]
+    if: always() && needs.admission.result == 'success' && github.run_number == 1 && github.run_attempt == 1
+    uses: ./.github/workflows/f3_receipt_projection.yaml
+    with:
+      cohort: diverse
+      source_run: ${{ format('{0}', github.run_id) }}
+      source_head: ${{ github.sha }}
+      final_run: ${{ format('{0}', github.run_id) }}
+      final_head: ${{ github.sha }}

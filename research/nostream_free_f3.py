@@ -45,6 +45,7 @@ def require(ok,msg):
     if not ok:raise f.StopBudget(msg)
 
 def input_fixture():
+    require(CASE!="F305","FRED source blocked pending permission; use primary-source replacement")
     source,digest,qid,resolve,units=CASE_SPECS[CASE]
     raw=Path("diverse-input/snapshot.json").read_bytes()
     require(hashlib.sha256(raw).hexdigest()==digest,"snapshot hash")

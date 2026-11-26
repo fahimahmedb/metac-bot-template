@@ -23,7 +23,7 @@ def utc(s):
     require(t.tzinfo is not None and t.utcoffset().total_seconds()==0,"UTC required")
     return t
 def number(v):
-    require(type(v) in (str,int,float),"invalid number")
+    require(type(v) in (str,int,float,Decimal),"invalid number")
     d=Decimal(str(v));require(d.is_finite(),"nonfinite number");return d
 def bounds(month):
     a=date.fromisoformat(month+"-01");b=date(a.year+(a.month==12),a.month%12+1,1);return a,b
@@ -34,7 +34,7 @@ def source_url(case,month):
     if case=="F310":
         return "https://home.treasury.gov/resource-center/data-chart-center/interest-rates/pages/xml?data=daily_treasury_yield_curve&field_tdr_date_value_month="+month.replace("-","")
     if case=="F308":
-        return "https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&starttime="+str(a)+"T00:00:00Z&endtime="+str(b)+"T00:00:00Z&minmagnitude=6&eventtype=earthquake&limit=1000&nodata=200"
+        return "https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&starttime="+str(a)+"T00:00:00Z&endtime="+str(b)+"T00:00:00Z&minmagnitude=6&eventtype=earthquake&limit=1000"
     if case=="F309":return "https://services.swpc.noaa.gov/json/solar-cycle/observed-solar-cycle-indices.json"
     raise ValueError("BLS first-release archive URL must be separately established")
 def load_archive(path):

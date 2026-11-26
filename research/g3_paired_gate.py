@@ -67,7 +67,7 @@ def evaluate(manifest,forecasts,outcomes,as_of):
     for ident,y in ys.items():
         e=events[ident]
         require(type(y["value"]) is int and y["value"] in (0,1),"invalid outcome")
-        require(dt(e["event_start"])<=dt(y["resolved_at"])<=cutoff,"outcome timing")
+        require(dt(e["event_start"])<=dt(y["resolved_at"])<=min(cutoff,dt(e["resolution_deadline"])),"outcome timing or registered resolution deadline")
         digest(y["source_sha256"])
     valid={}
     for ident,f in fs.items():
@@ -129,7 +129,7 @@ def tests():
     bad=copy.deepcopy(f)
     for row in bad:row["members"]={"nemotron":.5,"gpt_oss":.5,"ernie":.5};row["aggregate"]=.5
     require(evaluate(m,bad,y,t)["status"]=="FAIL_THRESHOLD","zero gain")
-    for kind in range(8):
+    for kind in range(9):
         mm,ff,yy=copy.deepcopy((m,f,y))
         if kind==0:mm["events"][1]["family"]=mm["events"][0]["family"]
         elif kind==1:ff.append(ff[0])
@@ -139,10 +139,11 @@ def tests():
         elif kind==5:yy[0]["value"]=True
         elif kind==6:ff[0]["engine_sha256"]="b"*64
         elif kind==7:yy[0]["resolved_at"]=mm["frozen_at"]
+        elif kind==8:yy[0]["resolved_at"]=(dt(mm["events"][0]["resolution_deadline"])+timedelta(days=1)).isoformat()
         try:evaluate(mm,ff,yy,t)
         except ValueError:pass
         else:raise AssertionError("bad fixture admitted: "+str(kind))
-    print("G3_PAIRED_GATE_TESTS_PASS=13 synthetic_only=true real_resolved_events=0")
+    print("G3_PAIRED_GATE_TESTS_PASS=14 synthetic_only=true real_resolved_events=0")
 if __name__=="__main__":
     if sys.argv[1:]==["--test"]:tests()
     elif len(sys.argv)==5:

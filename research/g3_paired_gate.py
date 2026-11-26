@@ -100,11 +100,18 @@ def evaluate(manifest,forecasts,outcomes,as_of):
     gain=metrics[PRIMARY]["brier"]-metrics["ensemble"]["brier"] if metrics else None
     # The pre-existing clip in score is inactive for all admitted probabilities.
     resolution_coverage=len(ys)/len(events) if events else 0
+    paired_coverage=len(pairs)/len(events) if events else 0
+    # Sensitivity bounds for missing registered pairs, not a confidence interval.
+    # Under the admitted [.01,.99] floor the Brier gain lies in [-.98,.98].
+    missing=len(events)-len(pairs)
+    cohort_gain_bounds=([(len(pairs)*gain-.98*missing)/len(events),
+                         (len(pairs)*gain+.98*missing)/len(events)]
+                        if events and gain is not None else None)
     final_analysis=as_of>=analysis_at
-    enough=final_analysis and len(pairs)>=MIN_N and len(blocks)>=MIN_BLOCKS and coverage>=MIN_COVERAGE and resolution_coverage>=MIN_COVERAGE
+    enough=final_analysis and len(pairs)>=MIN_N and len(blocks)>=MIN_BLOCKS and coverage>=MIN_COVERAGE and resolution_coverage>=MIN_COVERAGE and paired_coverage>=MIN_COVERAGE
     passed=enough and interval is not None and gain>=MIN_GAIN and interval[0]>0 and metrics["ensemble"]["log_loss"]<=metrics[PRIMARY]["log_loss"]
     status="PASS_STATISTICAL_ONLY" if passed else "FAIL_THRESHOLD" if enough else "UNKNOWN_INSUFFICIENT_EVIDENCE"
-    return {"status":status,"registered":len(events),"due":len(due),"resolved":len(ys),"paired":len(pairs),"coverage":coverage,"resolution_coverage":resolution_coverage,"final_analysis":final_analysis,"forecast_weeks":len(blocks),"metrics":metrics,"paired_brier_gain":gain,"grouped_ci95":interval,"primary":PRIMARY,"inference_calls":0,"provenance_independently_verified":False,"official_futureeval_score":False,"promotion_authorized":False}
+    return {"status":status,"registered":len(events),"due":len(due),"resolved":len(ys),"paired":len(pairs),"paired_coverage":paired_coverage,"coverage":coverage,"resolution_coverage":resolution_coverage,"final_analysis":final_analysis,"forecast_weeks":len(blocks),"metrics":metrics,"paired_brier_gain":gain,"full_cohort_gain_sensitivity_bounds":cohort_gain_bounds,"grouped_ci95":interval,"primary":PRIMARY,"inference_calls":0,"provenance_independently_verified":False,"official_futureeval_score":False,"promotion_authorized":False}
 def synthetic(n=100):
     from datetime import timedelta,timezone
     origin=datetime(2027,1,1,tzinfo=timezone.utc)
@@ -143,7 +150,19 @@ def tests():
         try:evaluate(mm,ff,yy,t)
         except ValueError:pass
         else:raise AssertionError("bad fixture admitted: "+str(kind))
-    print("G3_PAIRED_GATE_TESTS_PASS=14 synthetic_only=true real_resolved_events=0")
+    mm,ff,yy,tt=synthetic(120)
+    disjoint=evaluate(mm,ff[6:],yy[:-6],tt)
+    require(disjoint["paired_coverage"]==.9 and disjoint["status"]=="UNKNOWN_INSUFFICIENT_EVIDENCE","disjoint missingness")
+    same=evaluate(mm,ff[6:],yy[6:],tt)
+    require(same["paired_coverage"]==.95 and same["status"]=="PASS_STATISTICAL_ONLY","paired boundary")
+    require(all(abs(v-r["paired_brier_gain"])<1e-12 for v in r["full_cohort_gain_sensitivity_bounds"]),"complete cohort bounds")
+    for a,b in zip(ff,yy):
+        v=b["value"]
+        a["members"]={"nemotron":.5,"gpt_oss":.52 if v else .48,"ernie":.53 if v else .47}
+        a["aggregate"]=a["members"]["gpt_oss"]
+    weak=evaluate(mm,ff[6:],yy[6:],tt)
+    require(weak["status"]=="PASS_STATISTICAL_ONLY" and weak["full_cohort_gain_sensitivity_bounds"][0]<0<weak["full_cohort_gain_sensitivity_bounds"][1],"missingness can reverse full-cohort gain")
+    print("G3_PAIRED_GATE_TESTS_PASS=18 synthetic_only=true real_resolved_events=0")
 if __name__=="__main__":
     if sys.argv[1:]==["--test"]:tests()
     elif len(sys.argv)==5:

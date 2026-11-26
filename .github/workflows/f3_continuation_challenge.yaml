@@ -1,0 +1,77 @@
+name: F3 continuation local-failure challenge (expected failed branch)
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/f3_continuation_challenge.yaml']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  preserve:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        case: [F301,F303]
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: audit-${{ matrix.case }}
+          run-id: 45738482774
+          github-token: ${{ github.token }}
+          path: evidence
+      - uses: actions/upload-artifact@v4
+        with:
+          name: preserve-${{ matrix.case }}
+          path: evidence/audit.json
+          if-no-files-found: error
+  unavailable:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Inject one local failure before any receipt
+        run: |
+          echo "EXPECTED_LOCAL_FAILURE F302; no model dispatch"
+          exit 17
+  reconcile:
+    needs: [preserve, unavailable]
+    if: always() && github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: preserve-F*
+          path: incoming
+      - name: Continue after actual failed dependency and preserve genuine receipts
+        env:
+          FAILED_DEPENDENCY: ${{ needs.unavailable.result }}
+        run: |
+          test "$FAILED_DEPENDENCY" = "failure"
+          mkdir -p audits
+          for d in incoming/preserve-F*; do
+            mv "$d" "audits/${d##*/preserve-}"
+          done
+          PYTHONPATH=research python3 - <<'PY'
+          import json
+          from pathlib import Path
+          from f3_campaign_finalize import consolidate
+          r=consolidate("pilot",45733982405,"3459896cbd0d89f4274e527b5a5ced1fcff55993",Path("audits"))
+          assert r["status"]=="BLOCK" and r["passed"]==["F301","F303"]
+          assert r["unresolved"]==["F302"] and r["dispatches_lower"]==6 and r["dispatches_upper"]==10
+          assert r["automatic_live_admission"] is False and r["inference_calls"]==0
+          Path("challenge.json").write_text(json.dumps(r,sort_keys=True))
+          print("CONTINUATION_LOCAL_FAILURE_PASS="+json.dumps(r,sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: f3-continuation-challenge
+          path: challenge.json
+          if-no-files-found: error

@@ -1,0 +1,70 @@
+name: G3 Eurostat bounded historical source qualification
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/g3_eurostat_source_probe.yaml']
+permissions:
+  contents: read
+jobs:
+  source:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        candidate: [unemployment, retail, hicp]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Historical source only, no credentials or model calls
+        env:
+          CANDIDATE: ${{ matrix.candidate }}
+        run: python3 research/g3_eurostat_source_probe.py "$CANDIDATE"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: eurostat-${{ matrix.candidate }}
+          path: |
+            eurostat-source.json
+            eurostat-report.json
+          if-no-files-found: error
+  reconcile:
+    needs: source
+    if: always() && github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: eurostat-*
+          path: incoming
+      - name: Preserve successful source receipts and isolate local failures
+        run: |
+          python3 - <<'PY'
+          import json,hashlib
+          from pathlib import Path
+          reports={};blocked=[]
+          for k in ("unemployment","retail","hicp"):
+              try:
+                  p=Path("incoming")/("eurostat-"+k)
+                  d=json.loads((p/"eurostat-report.json").read_text())
+                  raw=(p/"eurostat-source.json").read_bytes()
+                  if d["candidate"]!=k or hashlib.sha256(raw).hexdigest()!=d["source_sha256"] or d["confirmatory_eligible"] is not False or d["inference_calls"]!=0 or d["outcomes_accessed"]!=0:
+                      raise ValueError("receipt mismatch")
+                  reports[k]={a:b for a,b in d.items() if a!="rows"}|{"observations":len(d["rows"])}
+              except (OSError,ValueError,KeyError,TypeError):
+                  blocked.append(k)
+          result={"status":"HISTORICAL_SOURCE_PROBES_PASS" if not blocked else "PARTIAL_BLOCK","reports":reports,"blocked":blocked,"confirmatory_pairs":0,"inference_calls":0,"future_outcomes_accessed":0}
+          Path("eurostat-final.json").write_text(json.dumps(result,sort_keys=True))
+          print("EUROSTAT_FINAL="+json.dumps(result,sort_keys=True))
+          if blocked:raise SystemExit(1)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eurostat-final
+          path: eurostat-final.json
+          if-no-files-found: error

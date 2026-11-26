@@ -1,0 +1,72 @@
+name: G3 Census offline resolution qualification
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/g3_census_resolution.yaml']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  qualify:
+    strategy:
+      fail-fast: false
+      matrix:
+        program: [M3ADV, BFS, FTD]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: census-bulk-${{ matrix.program }}
+          run-id: 45743246873
+          github-token: ${{ github.token }}
+          path: historical
+      - uses: actions/download-artifact@v4
+        with:
+          name: census-development-${{ matrix.program }}
+          run-id: 45743772441
+          github-token: ${{ github.token }}
+          path: frozen
+      - run: python3 research/g3_census_resolution.py "${{ matrix.program }}" frozen/census-development-definition.json historical/census-original-source.bin
+      - uses: actions/upload-artifact@v4
+        with:
+          name: census-resolution-${{ matrix.program }}
+          path: census-resolution-qualification.json
+          if-no-files-found: error
+  reconcile:
+    needs: qualify
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: census-resolution-*
+          path: incoming
+      - run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          reports={};blocked=[]
+          for k,y in (("M3ADV",6),("BFS",11),("FTD",8)):
+              try:
+                  r=json.loads((Path("incoming")/("census-resolution-"+k)/"census-resolution-qualification.json").read_bytes())
+                  assert r["program"]==k and r["historical_reference_n"]==23 and r["historical_reference_yes"]==y and r["synthetic_checks"]==15 and r["status"]=="OFFLINE_RESOLVER_QUALIFIED"
+                  assert r["actual_outcomes_accessed"]==r["inference_calls"]==r["confirmatory_pairs"]==0 and not r["capture_authorized"] and not r["capture_provenance_verified"]
+                  reports[k]=r
+              except (OSError,ValueError,KeyError,TypeError,AssertionError):blocked.append(k)
+          d={"status":"OFFLINE_RESOLVERS_QUALIFIED" if not blocked else "PARTIAL_BLOCK","reports":reports,"blocked":blocked,"actual_outcomes_accessed":0,"inference_calls":0,"capture_authorized":False,"confirmatory_pairs":0}
+          Path("census-resolution-final.json").write_text(json.dumps(d,sort_keys=True))
+          print("CENSUS_RESOLUTION_FINAL="+json.dumps(d,sort_keys=True))
+          if blocked:raise SystemExit(1)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: census-resolution-final
+          path: census-resolution-final.json
+          if-no-files-found: error

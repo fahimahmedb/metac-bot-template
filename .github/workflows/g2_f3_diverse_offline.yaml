@@ -1,4 +1,4 @@
-name: F3 diverse six-event offline admission
+name: F3 primary Treasury replacement offline admission
 on:
   push:
     branches: [research/historical-blind-calibration]
@@ -19,30 +19,10 @@ jobs:
       max-parallel: 6
       matrix:
         include:
-          - case: F304
-            question_type: multiple_choice
-            source: D02
-            evidence_run: 45520535838
-          - case: F305
+          - case: F310
             question_type: numeric
-            source: D04
-            evidence_run: 45520535838
-          - case: F306
-            question_type: binary
-            source: D06
-            evidence_run: 45520535838
-          - case: F307
-            question_type: binary
-            source: D01
-            evidence_run: 45522593032
-          - case: F308
-            question_type: numeric
-            source: D03
-            evidence_run: 45522593032
-          - case: F309
-            question_type: multiple_choice
-            source: D05
-            evidence_run: 45520535838
+            source: treasury
+            evidence_run: 45737456249
     steps:
       - uses: actions/checkout@v5
         with:
@@ -60,12 +40,12 @@ jobs:
       - name: Install pinned engine and local adapter
         run: |
           test "$(git -C upstream rev-parse HEAD)" = "79c1d7a1192a00724646ab05c67f3b776d2d7b65"
-          cp research/nostream_runner.py research/nostream_free_f0.py research/nostream_free_f2.py research/nostream_free_f3.py research/g2_diverse_cases.json research/g2_diverse_evidence.py upstream/
+          cp research/nostream_runner.py research/nostream_free_f0.py research/nostream_free_f2.py research/nostream_free_f3.py research/g2_f3_treasury_snapshot.py research/g2_diverse_cases.json research/g2_diverse_evidence.py upstream/
           cd upstream
           uv sync --dev --frozen
       - uses: actions/download-artifact@v4
         with:
-          name: diverse-${{ matrix.source }}-snapshot
+          name: f3-primary-treasury-F310
           run-id: ${{ matrix.evidence_run }}
           github-token: ${{ github.token }}
           path: upstream/diverse-input

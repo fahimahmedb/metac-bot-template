@@ -99,7 +99,7 @@ def valid_aggregation(case,q,members,aggs,report):
     if case["type"]=="binary":return abs(report-round(statistics.median(members.values()),3))<=.001
     if case["type"]=="multiple_choice":
         from metaculus_bot.mc_processing import clamp_and_renormalize_probs
-        expected=dict(zip(q.options,clamp_and_renormalize_probs([statistics.median(v[n] for v in members.values()) for n in q.options],strict=True)))
+        expected=dict(zip(q.options,clamp_and_renormalize_probs([statistics.median(v[n] for v in members.values()) for n in q.options]),strict=True))
         return max(abs(report[n]-expected[n]) for n in q.options)<=1e-6
     return len(report)==201 and report==sorted(report) and all(math.isfinite(p) and 0<=p<=1 for p in report)
 

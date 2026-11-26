@@ -1,0 +1,98 @@
+name: Sealed local LLM historical replay
+
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths:
+      - "research/local_llm_replay.py"
+      - ".github/workflows/local_llm_replay.yaml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sealed-historical-replay
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: contains(github.event.head_commit.message, '[local-replay]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Fetch pinned archive and prepare disjoint data
+        run: |
+          curl --fail --location --retry 2 --max-time 300 --max-filesize 300000000 \
+            "https://www.forecastbench.org/assets/data/processed-forecast-sets/processed_forecast_sets.tar.gz" \
+            -o /tmp/forecastbench-processed.tar.gz
+          python research/local_llm_replay.py prepare /tmp/forecastbench-processed.tar.gz /tmp/replay
+      - uses: actions/upload-artifact@v4
+        with:
+          name: replay-inputs
+          path: /tmp/replay/inputs.json
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: replay-sealed-labels
+          path: /tmp/replay/labels.json
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: replay-provenance
+          path: /tmp/replay/manifest.json
+          if-no-files-found: error
+  inference:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/download-artifact@v4
+        with:
+          name: replay-inputs
+          path: /tmp/replay
+      - name: Install CPU inference dependencies
+        run: |
+          pip install torch==2.7.1 --index-url https://download.pytorch.org/whl/cpu
+          pip install 'transformers==4.51.3' 'huggingface_hub==0.30.2'
+      - name: Run inference without labels or market odds
+        run: |
+          test ! -f /tmp/replay/labels.json
+          python research/local_llm_replay.py infer /tmp/replay/inputs.json /tmp/replay/predictions.json
+          test ! -f /tmp/replay/labels.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: replay-frozen-predictions
+          path: /tmp/replay/predictions.json
+          if-no-files-found: error
+  score:
+    needs: [prepare,inference]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/download-artifact@v4
+        with:
+          name: replay-frozen-predictions
+          path: /tmp/replay
+      - uses: actions/download-artifact@v4
+        with:
+          name: replay-sealed-labels
+          path: /tmp/replay
+      - name: Open labels only after inference job finishes
+        run: python research/local_llm_replay.py score /tmp/replay/predictions.json /tmp/replay/labels.json /tmp/replay/report.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: replay-scoring-report
+          path: /tmp/replay/report.json
+          if-no-files-found: error

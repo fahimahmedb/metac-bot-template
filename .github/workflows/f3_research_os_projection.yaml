@@ -1,0 +1,52 @@
+name: F3 typed Research OS partial receipt qualification (offline)
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/f3_research_os_projection.yaml']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  qualify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v5
+        with:
+          repository: fahimahmedb/Quant-Trade
+          ref: 4910c22e1e48ff84d5a927e5aa54e2493354b177
+          path: qt-contract
+          sparse-checkout: research/research_os/contracts
+          persist-credentials: false
+      - name: Verify exact native contract and reused audit identities
+        run: |
+          test "$(git -C qt-contract rev-parse HEAD)" = "4910c22e1e48ff84d5a927e5aa54e2493354b177"
+          test "$(git hash-object qt-contract/research/research_os/contracts/experiment-result.schema.json)" = "0e84ce4620a3d423b9712023a1ea91caa986c2e7"
+          test "$(git hash-object qt-contract/research/research_os/contracts/evidence-assessment.schema.json)" = "cf4dc6d9439b0ccf7e4fdeef73a8026684a0e917"
+          test "$(git hash-object research/f3_campaign_finalize.py)" = "4324eb2a899df156441b9e4651329ef567857bf6"
+      - name: Retrieve exact historical finalizer and typed projection bytes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir evidence
+          for entry in projection:45742181591:15081707313 final:45739677517:15080054139; do
+            IFS=: read -r name run artifact <<< "$entry"
+            gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run" > "evidence/$name-run.json"
+            gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact" > "evidence/$name-artifact.json"
+            gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact/zip" > "evidence/$name.zip"
+          done
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --disable-pip-version-check --quiet jsonschema==4.23.0
+      - run: python research/f3_research_os_projection.py evidence qt-contract/research/research_os/contracts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: f3-research-os-projection
+          path: |
+            experiment-result.json
+            evidence-assessment.json
+          if-no-files-found: error

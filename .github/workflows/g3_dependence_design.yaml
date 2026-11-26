@@ -1,0 +1,21 @@
+name: G3 dependence-aware pre-outcome design
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/g3_dependence_design.yaml']
+permissions:
+  contents: read
+jobs:
+  design:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - run: python3 research/g3_dependence_design.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: g3-dependence-design
+          path: g3-dependence-design.json
+          if-no-files-found: error

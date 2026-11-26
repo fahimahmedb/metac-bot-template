@@ -1,0 +1,110 @@
+name: F3 ERNIE one-call technical screen
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/g2_f3_member_screen_once.yaml']
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: nostream-free-f0-once
+  cancel-in-progress: false
+jobs:
+  screen:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v5
+        with:
+          repository: No-Stream/nostreambot-metaculus-bot
+          ref: 79c1d7a1192a00724646ab05c67f3b776d2d7b65
+          path: upstream
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
+          python-version: '3.12'
+      - name: Install pinned reference and offline recovery probe
+        run: |
+          test "$(git -C upstream rev-parse HEAD)" = "79c1d7a1192a00724646ab05c67f3b776d2d7b65"
+          cp research/nostream_runner.py research/nostream_free_f0.py research/nostream_free_f2.py research/g2_diverse_cases.json research/g2_diverse_evidence.py research/g2_d06_recovery_probe.py research/g2_member_screen.py upstream/
+          cd upstream
+          uv sync --dev --frozen
+      - uses: actions/download-artifact@v4
+        with:
+          name: diverse-D06-snapshot
+          run-id: 45520535838
+          github-token: ${{ github.token }}
+          path: upstream/diverse-input
+      - uses: actions/download-artifact@v4
+        with:
+          name: nostream-diverse-D06-evidence
+          run-id: 45522739596
+          github-token: ${{ github.token }}
+          path: upstream/original
+      - name: Verify original identity, prompt hash and adversarial typed-ballot tests
+        working-directory: upstream
+        env:
+          OPENROUTER_API_KEY: dummy-offline
+          NOSTREAM_G2: 'true'
+          NOSTREAM_QUESTION_TYPE: binary
+          NOSTREAM_DIVERSE_CASE: D06
+          NOSTREAM_DIVERSE_SNAPSHOT_SHA256: 1d8421df4bf505688db85cbbc645ec5a60c47240bcfb81c04a62eb6424f4248c
+          NOSTREAM_CEREBRAS_NO_RECHARGE_ATTESTED: 'true'
+          NATIVE_SEARCH_ENABLED: 'false'
+          FINANCIAL_DATA_ENABLED: 'false'
+          GEMINI_SEARCH_ENABLED: 'false'
+          GAP_FILL_ENABLED: 'false'
+          GAP_FILL_V2_ENABLED: 'false'
+          PREDICTION_MARKETS_ENABLED: 'false'
+          RESOLUTION_SOURCE_ENABLED: 'false'
+          RESOLUTION_SOURCE_URL_CONTEXT_ENABLED: 'false'
+          TS_ANCHOR_ENABLED: 'false'
+          TS_ANCHOR_CHART_ENABLED: 'false'
+          PROBABILISTIC_TOOLS_ENABLED: 'false'
+          BINARY_STACKING_ENABLED: 'false'
+          MC_STACKING_ENABLED: 'false'
+          NUMERIC_STACKING_ENABLED: 'false'
+          PERSIST_RESEARCH_ENABLED: 'false'
+          RAW_RESEARCH_LOG_ENABLED: 'false'
+        run: |
+          uv run --frozen python g2_d06_recovery_probe.py
+          uv run --frozen python g2_member_screen.py
+      - name: One real date-bound ERNIE screen; no retry or paid fallback
+        working-directory: upstream
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          NOSTREAM_SCREEN_LIVE_AUTHORIZED: 'true'
+          NOSTREAM_SCREEN_EXPECTED_UTC_DAY: '2026-11-26'
+          NOSTREAM_G2: 'true'
+          NOSTREAM_QUESTION_TYPE: binary
+          NOSTREAM_DIVERSE_CASE: D06
+          NOSTREAM_DIVERSE_SNAPSHOT_SHA256: 1d8421df4bf505688db85cbbc645ec5a60c47240bcfb81c04a62eb6424f4248c
+          NOSTREAM_CEREBRAS_NO_RECHARGE_ATTESTED: 'true'
+          NATIVE_SEARCH_ENABLED: 'false'
+          FINANCIAL_DATA_ENABLED: 'false'
+          GEMINI_SEARCH_ENABLED: 'false'
+          GAP_FILL_ENABLED: 'false'
+          GAP_FILL_V2_ENABLED: 'false'
+          PREDICTION_MARKETS_ENABLED: 'false'
+          RESOLUTION_SOURCE_ENABLED: 'false'
+          RESOLUTION_SOURCE_URL_CONTEXT_ENABLED: 'false'
+          TS_ANCHOR_ENABLED: 'false'
+          TS_ANCHOR_CHART_ENABLED: 'false'
+          PROBABILISTIC_TOOLS_ENABLED: 'false'
+          BINARY_STACKING_ENABLED: 'false'
+          MC_STACKING_ENABLED: 'false'
+          NUMERIC_STACKING_ENABLED: 'false'
+          PERSIST_RESEARCH_ENABLED: 'false'
+          RAW_RESEARCH_LOG_ENABLED: 'false'
+        run: uv run --frozen python g2_member_screen.py --live
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: f3-ernie-one-call-receipt
+          path: upstream/free-results/
+          if-no-files-found: warn

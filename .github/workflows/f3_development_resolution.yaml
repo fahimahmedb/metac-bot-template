@@ -1,0 +1,134 @@
+name: F3 resolution and scoring development qualification corrected
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/f3_development_resolution.yaml']
+permissions:
+  contents: read
+jobs:
+  score:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Verify durable reference bytes and test six paired scoring contracts
+        run: python3 research/f3_development_resolution.py research/F3_DIVERSE_REFERENCES.json
+      - name: Challenge source format and boundary handling without network
+        run: |
+          PYTHONPATH=research python3 - <<'PY'
+          import json
+          from datetime import datetime,timezone
+          from decimal import Decimal
+          from f3_development_resolution import parse
+          def reject(fn):
+              try:fn()
+              except (ValueError,KeyError,TypeError,ArithmeticError):return
+              raise AssertionError("invalid source accepted")
+          ecb="FREQ,CURRENCY,CURRENCY_DENOM,EXR_TYPE,EXR_SUFFIX,TIME_PERIOD,OBS_VALUE\nD,USD,EUR,SP00,A,2026-10-29,1.15\nD,USD,EUR,SP00,A,2026-10-30,1.16\n"
+          assert parse("F306",ecb.encode(),"2026-10")==Decimal("1.16")
+          reject(lambda:parse("F306",ecb.replace("USD","GBP").encode(),"2026-10"))
+          reject(lambda:parse("F306",(ecb+"D,USD,EUR,SP00,A,2026-10-30,1.17\n").encode(),"2026-10"))
+          reject(lambda:parse("F306",ecb.replace("2026-10-30","2026-11-01").encode(),"2026-10"))
+          treasury=b"<feed><entry><properties><NEW_DATE>2026-10-30T00:00:00</NEW_DATE><BC_10YEAR>4.20</BC_10YEAR></properties></entry></feed>"
+          assert parse("F310",treasury,"2026-10")==Decimal("4.20")
+          reject(lambda:parse("F310",treasury.replace(b"BC_10YEAR",b"BC_5YEAR"),"2026-10"))
+          start=int(datetime(2026,10,1,tzinfo=timezone.utc).timestamp()*1000);end=int(datetime(2026,11,1,tzinfo=timezone.utc).timestamp()*1000)
+          def event(ident,t,mag=6):
+              return {"id":ident,"properties":{"time":t,"mag":mag,"type":"earthquake"}}
+          def data(events):return json.dumps({"type":"FeatureCollection","metadata":{"count":len(events)},"features":events}).encode()
+          assert parse("F308",data([event("a",start),event("b",end)]),"2026-10")==1
+          reject(lambda:parse("F308",data([event("a",start),event("a",start+1)]),"2026-10"))
+          reject(lambda:parse("F308",data([event("a",start,5.9)]),"2026-10"))
+          reject(lambda:parse("F308",data([event("a",end+1)]),"2026-10"))
+          reject(lambda:parse("F308",data([event(str(i),start) for i in range(1000)]),"2026-10"))
+          assert parse("F308",data([]),"2026-10")==0
+          noaa=[{"time-tag":"2026-10","ssn":80,"smoothed_ssn":150}]
+          assert parse("F309",json.dumps(noaa).encode(),"2026-10")==80
+          reject(lambda:parse("F309",json.dumps(noaa*2).encode(),"2026-10"))
+          reject(lambda:parse("F309",b'[{"time-tag":"2026-10","ssn":-1}]',"2026-10"))
+          print("F3_SOURCE_BOUNDARIES_PASS=15 synthetic_only=true")
+          PY
+  historical:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        case: [F304,F310,F306,F307,F308,F309]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Read historical source only (October 2026, not future target)
+        env:
+          CASE: ${{ matrix.case }}
+        run: |
+          PYTHONPATH=research python3 - <<'PY'
+          import hashlib,json,os,urllib.request,urllib.parse
+          from datetime import datetime,timezone
+          from pathlib import Path
+          from f3_development_resolution import parse,source_url,classify
+          c=os.environ["CASE"];month="2026-10"
+          urls={"F304":"https://www.bls.gov/news.release/archives/ppi_11132026.htm","F307":"https://www.bls.gov/news.release/archives/empsit_11062026.htm"}
+          url=urls[c] if c in urls else source_url(c,month)
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self,*args,**kwargs):return None
+          now=datetime.now(timezone.utc)
+          assert now.date().isoformat()=="2026-11-26"
+          req=urllib.request.Request(url,headers={"User-Agent":"Forecasting-research-historical-validation/1.0","Accept":"*/*"})
+          with urllib.request.build_opener(NoRedirect()).open(req,timeout=30) as r:
+              assert r.status==200 and r.geturl()==url
+              raw=r.read(4_000_001)
+          assert 0<len(raw)<=4_000_000
+          value=parse(c,raw,month)
+          if c=="F304":assert str(value)=="0.3"
+          if c=="F307":assert str(value)=="4.1"
+          doc={"case":c,"historical_month":month,"source_url":url,"source_sha256":hashlib.sha256(raw).hexdigest(),"captured_at":now.isoformat(),"parsed_value":str(value),"threshold_classification":classify(c,value),"scope":"HISTORICAL_SOURCE_FORMAT_ONLY","first_release_verified":False,"future_outcomes_accessed":0,"inference_calls":0}
+          Path("historical-source-receipt.json").write_text(json.dumps(doc,sort_keys=True))
+          print("F3_HISTORICAL_SOURCE="+json.dumps(doc,sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: f3-historical-source-${{ matrix.case }}
+          path: historical-source-receipt.json
+          if-no-files-found: error
+  reconcile:
+    needs: [score,historical]
+    if: always() && github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: f3-historical-source-*
+          path: incoming
+      - name: Preserve actual format successes and isolate missing evidence
+        env:
+          SCORE_RESULT: ${{ needs.score.result }}
+        run: |
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          cases=["F304","F310","F306","F307","F308","F309"]
+          ready=[];blocked=[]
+          for c in cases:
+              p=Path("incoming")/("f3-historical-source-"+c)/"historical-source-receipt.json"
+              if not p.exists():blocked.append(c);continue
+              d=json.loads(p.read_text())
+              assert d["case"]==c and d["historical_month"]=="2026-10" and d["scope"]=="HISTORICAL_SOURCE_FORMAT_ONLY" and d["future_outcomes_accessed"]==d["inference_calls"]==0
+              ready.append(d)
+          r={"score_job":os.environ["SCORE_RESULT"],"historical_source_format_pass":ready,"historical_source_blocked":blocked,"actual_f3_outcomes_scored":0,"real_inference":0,"capture_runtime_admitted":False,"promotion_authorized":False}
+          Path("f3-development-resolution-result.json").write_text(json.dumps(r,sort_keys=True))
+          print("F3_DEVELOPMENT_RESOLUTION_RESULT="+json.dumps(r,sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: f3-development-resolution-result
+          path: f3-development-resolution-result.json
+          if-no-files-found: error

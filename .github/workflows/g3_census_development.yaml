@@ -1,0 +1,64 @@
+name: G3 Census historical development definitions
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/g3_census_development.yaml', 'research/g3_census_development.py']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  define:
+    strategy:
+      fail-fast: false
+      matrix:
+        program: [M3ADV, BFS, FTD]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: census-bulk-${{ matrix.program }}
+          run-id: 45743246873
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: input
+      - run: python research/g3_census_development.py "${{ matrix.program }}" input
+      - uses: actions/upload-artifact@v4
+        with:
+          name: census-development-${{ matrix.program }}
+          path: census-development-definition.json
+          if-no-files-found: error
+  reconcile:
+    needs: define
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: census-development-*
+          path: input
+      - run: |
+          python - <<'PY'
+          import json, pathlib, hashlib
+          expected={"M3ADV":("b7e8a0d8116c8cdd74cce15db593ea2a32523a3e52b0327d4e05a8942093f883",6),"BFS":("9a0e869ade79b7ed16437e077029f83b6a5711e52c37bdace15710e084cbbfce",11),"FTD":("0413cb6b4446631bc3a0c4766b8da737ffca0e0fa1710b2875eecd8258c93aa2",8)}
+          result={}
+          for k,(h,y) in expected.items():
+              p=pathlib.Path("input")/("census-development-"+k)/"census-development-definition.json"
+              if not p.is_file():continue
+              d=json.loads(p.read_bytes());a=d["definition"];ref=d["reference"]
+              assert a["program"]==k and hashlib.sha256(json.dumps(a,sort_keys=True,separators=(",",":")).encode()).hexdigest()==h==d["definition_sha256"]
+              assert ref["n"]==23 and ref["yes"]==y and ref["probability"]==(y+1)/25
+              assert not any(a[x] for x in ("inference_authorized","capture_authorized","confirmatory_eligible","capture_provenance_verified"))
+              assert d["real_forecasts"]==d["actual_outcomes_accessed"]==d["inference_calls"]==0
+              result[k]=d
+          out=dict(definitions=result,blocked=sorted(set(expected)-set(result)),actual_outcomes_accessed=0,inference_calls=0,confirmatory_pairs=0)
+          pathlib.Path("census-development-final.json").write_text(json.dumps(out,sort_keys=True))
+          print("CENSUS_DEVELOPMENT_FINAL="+json.dumps(out,sort_keys=True))
+          assert len(result)==3
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: census-development-final
+          path: census-development-final.json
+          if-no-files-found: error

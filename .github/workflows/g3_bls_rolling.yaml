@@ -1,0 +1,67 @@
+name: G3 BLS chronological statistical benchmarks
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/g3_bls_rolling.yaml']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  evaluate:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        candidate: [cpi,payroll,openings]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: g3-bls-${{ matrix.candidate }}
+          run-id: 45739662391
+          github-token: ${{ github.token }}
+          path: evidence
+      - name: Evaluate on frozen observations with strictly earlier training rows
+        env:
+          CANDIDATE: ${{ matrix.candidate }}
+        run: python3 research/g3_bls_rolling.py "$CANDIDATE" evidence/bls-candidate.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bls-rolling-${{ matrix.candidate }}
+          path: rolling-result.json
+          if-no-files-found: error
+  reconcile:
+    needs: evaluate
+    if: always() && github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bls-rolling-*
+          path: incoming
+      - name: Consolidate exploratory scores without choosing on evaluated outcomes
+        run: |
+          python3 - <<'PY'
+          import json,math
+          from pathlib import Path
+          reports={}
+          for candidate in ("cpi","payroll","openings"):
+              d=json.loads((Path("incoming")/("bls-rolling-"+candidate)/"rolling-result.json").read_text())
+              assert d["candidate"]==candidate and d["decision"]=="KEEP_PREDECLARED_EXPANDING_BASELINE" and d["inference_calls"]==0 and d["n"]==len(d["rows"])
+              assert all(math.isfinite(m["brier"]) and math.isfinite(m["log_loss"]) for m in d["metrics"].values())
+              reports[candidate]={k:v for k,v in d.items() if k!="rows"}
+          r={"reports":reports,"total_series_months":sum(d["n"] for d in reports.values()),"independent_events_claimed":False,"inference_calls":0,"promotion_authorized":False}
+          Path("bls-rolling-consolidated.json").write_text(json.dumps(r,sort_keys=True))
+          print("BLS_ROLLING_CONSOLIDATED="+json.dumps(r,sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bls-rolling-consolidated
+          path: bls-rolling-consolidated.json
+          if-no-files-found: error

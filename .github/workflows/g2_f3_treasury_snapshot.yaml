@@ -1,0 +1,21 @@
+name: F3 primary Treasury data preflight
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/g2_f3_treasury_snapshot.yaml']
+permissions:
+  contents: read
+jobs:
+  treasury:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - run: python3 -I research/g2_f3_treasury_snapshot.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: f3-primary-treasury-F310
+          path: treasury-input/snapshot.json
+          if-no-files-found: error

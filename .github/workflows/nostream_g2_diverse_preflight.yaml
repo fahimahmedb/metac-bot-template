@@ -1,0 +1,66 @@
+name: No-Stream G2 diverse evidence preflight
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/nostream_g2_diverse_preflight.yaml']
+permissions:
+  contents: read
+concurrency:
+  group: nostream-free-f0-once
+  cancel-in-progress: false
+jobs:
+  evidence:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        case_id: [D01,D03]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v5
+        with:
+          repository: No-Stream/nostreambot-metaculus-bot
+          ref: 79c1d7a1192a00724646ab05c67f3b776d2d7b65
+          path: upstream
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: '3.12'
+          enable-cache: false
+      - name: Read actual public evidence
+        env:
+          CASE_ID: ${{ matrix.case_id }}
+        run: python3 research/g2_diverse_evidence.py "$CASE_ID" evidence
+      - name: Verify question constructor against pinned engine
+        working-directory: upstream
+        env:
+          CASE_ID: ${{ matrix.case_id }}
+        run: |
+          test "$(git rev-parse HEAD)" = "79c1d7a1192a00724646ab05c67f3b776d2d7b65"
+          cp ../research/g2_diverse_evidence.py ../research/g2_diverse_cases.json .
+          uv sync --dev --frozen
+          uv run --frozen python - <<'PY'
+          import os,json
+          from pathlib import Path
+          from g2_diverse_evidence import load_case,build_question
+          case=load_case(os.environ["CASE_ID"])
+          q=build_question(case)
+          assert q.id_of_question==case["qid"]
+          assert q.id_of_post==case["qid"]
+          assert q.question_text==case["question"]
+          assert json.loads(Path("../evidence/snapshot.json").read_text())["case"]==case
+          if case["type"]=="multiple_choice":assert q.options==case["options"]
+          if case["type"]=="numeric":assert q.lower_bound==case["lower"] and q.upper_bound==case["upper"]
+          print("DIVERSE_QUESTION_PASS",case["id"],case["type"],type(q).__name__)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: diverse-${{ matrix.case_id }}-snapshot
+          path: evidence/
+          if-no-files-found: warn

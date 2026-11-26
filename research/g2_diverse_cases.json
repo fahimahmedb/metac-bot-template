@@ -1,0 +1,106 @@
+{
+  "campaign": "F2-G2-DIVERSE-01",
+  "registered_date": "2026-11-25",
+  "cutoff": "2026-11-24",
+  "scope": "prospective local noncontest technical cases; distinct events, not assumed independent; no community probabilities; not LOT01",
+  "max_total_attempts": 30,
+  "max_attempts_per_case": 5,
+  "baseline_sha": "ca455406d3886889dd0ff7dcbdb24dc9f2b7c8c8",
+  "cases": [
+    {
+      "id": "D01",
+      "qid": 990011,
+      "type": "binary",
+      "domain": "labour",
+      "question": "Will the US seasonally adjusted U-3 unemployment rate for December 2026 be at least 4.5%?",
+      "criteria": "YES if the first BLS Employment Situation release covering December 2026 reports seasonally adjusted U-3 at 4.5% or higher; otherwise NO.",
+      "source": "https://www.bls.gov/news.release/empsit.htm",
+      "adapter": "bls",
+      "series": "LNS14000000",
+      "url": "https://api.bls.gov/publicAPI/v1/timeseries/data/LNS14000000",
+      "resolve": "2027-01-31T23:59:59Z"
+    },
+    {
+      "id": "D02",
+      "qid": 990012,
+      "type": "multiple_choice",
+      "domain": "producer prices",
+      "question": "What will the first reported seasonally adjusted monthly change in US PPI final demand for December 2026 be?",
+      "criteria": "Use the first BLS PPI release for December 2026, headline final demand monthly percent change as published. Negative if below zero; zero to below 0.5 inclusive of zero; 0.5 or higher inclusive of 0.5.",
+      "options": [
+        "Negative",
+        "Zero to below 0.5%",
+        "0.5% or higher"
+      ],
+      "source": "https://www.bls.gov/news.release/ppi.htm",
+      "adapter": "bls",
+      "series": "WPSFD4",
+      "url": "https://api.bls.gov/publicAPI/v1/timeseries/data/WPSFD4",
+      "resolve": "2027-01-31T23:59:59Z"
+    },
+    {
+      "id": "D03",
+      "qid": 990013,
+      "type": "numeric",
+      "domain": "seismology",
+      "question": "How many earthquakes of magnitude 6.0 or greater worldwide will USGS ComCat list for December 2026?",
+      "criteria": "Count unique USGS catalog events of eventtype earthquake with preferred magnitude >=6.0 and origin time in [2026-12-01T00:00:00Z,2027-01-01T00:00:00Z), using the catalog snapshot on 2027-01-15 UTC.",
+      "source": "https://earthquake.usgs.gov/fdsnws/event/1/",
+      "adapter": "usgs",
+      "url": "https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson&starttime=2026-01-01&endtime=2026-11-01&minmagnitude=6&eventtype=earthquake&limit=1000",
+      "resolve": "2027-01-15T23:59:59Z",
+      "unit": "earthquakes",
+      "lower": 0,
+      "upper": 50,
+      "open_lower": false,
+      "open_upper": true
+    },
+    {
+      "id": "D04",
+      "qid": 990014,
+      "type": "numeric",
+      "domain": "interest rates",
+      "question": "What will be the final non-missing US 10-year constant maturity Treasury yield observation dated in December 2026?",
+      "criteria": "Use the latest nonmissing December 2026 observation of Federal Reserve H.15 DGS10, in percent, as shown in FRED on 2027-01-15 UTC.",
+      "source": "https://fred.stlouisfed.org/series/DGS10",
+      "adapter": "fred",
+      "series": "DGS10",
+      "url": "https://fred.stlouisfed.org/graph/fredgraph.csv?id=DGS10&cosd=2026-06-01&coed=2026-11-24",
+      "resolve": "2027-01-15T23:59:59Z",
+      "unit": "percent",
+      "lower": -2,
+      "upper": 15,
+      "open_lower": true,
+      "open_upper": true
+    },
+    {
+      "id": "D05",
+      "qid": 990015,
+      "type": "multiple_choice",
+      "domain": "solar physics",
+      "question": "Which interval will contain the monthly observed sunspot number for December 2026?",
+      "criteria": "Use the December 2026 ssn (observed monthly sunspot number, not smoothed or predicted) in NOAA SWPC observed-solar-cycle-indices.json as of 2027-01-31 UTC. Below 80; 80 inclusive to below 140; 140 or greater.",
+      "options": [
+        "Below 80",
+        "80 to below 140",
+        "140 or higher"
+      ],
+      "source": "https://services.swpc.noaa.gov/json/solar-cycle/observed-solar-cycle-indices.json",
+      "adapter": "noaa",
+      "url": "https://services.swpc.noaa.gov/json/solar-cycle/observed-solar-cycle-indices.json",
+      "resolve": "2027-01-31T23:59:59Z"
+    },
+    {
+      "id": "D06",
+      "qid": 990016,
+      "type": "binary",
+      "domain": "foreign exchange",
+      "question": "Will the last ECB USD per EUR reference rate dated in December 2026 be at least 1.15?",
+      "criteria": "YES if the final published daily observation dated in December 2026 of EXR.D.USD.EUR.SP00.A is >=1.15 USD per EUR, as seen on 2027-01-15 UTC; otherwise NO.",
+      "source": "https://data.ecb.europa.eu/data/datasets/EXR/EXR.D.USD.EUR.SP00.A",
+      "adapter": "ecb",
+      "url": "https://data-api.ecb.europa.eu/service/data/EXR/D.USD.EUR.SP00.A?startPeriod=2026-06-01&endPeriod=2026-11-24&format=csvdata",
+      "resolve": "2027-01-15T23:59:59Z"
+    }
+  ]
+}

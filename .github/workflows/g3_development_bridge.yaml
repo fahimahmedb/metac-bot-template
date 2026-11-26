@@ -1,0 +1,148 @@
+name: G3 native offline development bridge
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/g3_development_bridge.yaml']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  bridge:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        include:
+          - family: bls
+            candidate: cpi
+            source_run: 45739662391
+            definition_run: 45740108112
+            sha: 11ba6ab0f40cf567c471133bb5b85a353b81b69bd18e44191a41398939beac72
+          - family: bls
+            candidate: payroll
+            source_run: 45739662391
+            definition_run: 45740108112
+            sha: 5a05476212bc9b4d28ac59f66bac2eed8ed353e7e054e9624adea38415bad4ee
+          - family: bls
+            candidate: openings
+            source_run: 45739662391
+            definition_run: 45740108112
+            sha: 8532e4b2a292fb8217f2b82f614257c1478cf08c74b12070b47ab84460a2da2c
+          - family: eurostat
+            candidate: hicp
+            source_run: 45741079382
+            definition_run: 45741686088
+            sha: 72d5cc2d29b322e69fdb9073354fb2673939a352a4a883ad5f70ba103e799ffd
+          - family: eurostat
+            candidate: retail
+            source_run: 45741079382
+            definition_run: 45741686088
+            sha: ca2b128fea482d0ed477637527e8751e885c6a5b9c107323a9f4cd3a324305f4
+          - family: eurostat
+            candidate: unemployment
+            source_run: 45741286536
+            definition_run: 45741686088
+            sha: dfe19645c8feeb91dda848d4ba7594429b254d9ddb8a888845e1e9c2bc19b549
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v5
+        with:
+          repository: No-Stream/nostreambot-metaculus-bot
+          ref: 79c1d7a1192a00724646ab05c67f3b776d2d7b65
+          path: upstream
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
+          python-version: '3.12'
+      - name: Install exact pinned engine and local modules
+        run: |
+          test "$(git -C upstream rev-parse HEAD)" = "79c1d7a1192a00724646ab05c67f3b776d2d7b65"
+          cp research/nostream_runner.py research/nostream_free_f0.py research/nostream_free_f2.py research/nostream_free_f3.py research/g2_diverse_evidence.py research/g2_diverse_cases.json research/g3_bls_candidates.py research/g3_bls_rolling.py research/g3_bls_resolution.py research/g3_eurostat_source_probe.py research/g3_eurostat_development.py research/g3_development_bridge.py upstream/
+          cd upstream
+          uv sync --dev --frozen
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.family == 'bls' && format('g3-bls-{0}',matrix.candidate) || format('eurostat-{0}',matrix.candidate) }}
+          run-id: ${{ matrix.source_run }}
+          github-token: ${{ github.token }}
+          path: upstream/evidence/source
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ format('{0}-definition-{1}',matrix.family,matrix.candidate) }}
+          run-id: ${{ matrix.definition_run }}
+          github-token: ${{ github.token }}
+          path: upstream/evidence/definition
+      - name: Native mock prediction pipeline with sockets blocked
+        working-directory: upstream
+        env:
+          OPENROUTER_API_KEY: dummy-offline
+          NOSTREAM_G2: 'true'
+          NOSTREAM_QUESTION_TYPE: binary
+          NOSTREAM_F3_CASE: F301
+          FAMILY: ${{ matrix.family }}
+          CANDIDATE: ${{ matrix.candidate }}
+          EXPECTED: ${{ matrix.sha }}
+          NATIVE_SEARCH_ENABLED: 'false'
+          FINANCIAL_DATA_ENABLED: 'false'
+          GEMINI_SEARCH_ENABLED: 'false'
+          GAP_FILL_ENABLED: 'false'
+          GAP_FILL_V2_ENABLED: 'false'
+          PREDICTION_MARKETS_ENABLED: 'false'
+          RESOLUTION_SOURCE_ENABLED: 'false'
+          RESOLUTION_SOURCE_URL_CONTEXT_ENABLED: 'false'
+          TS_ANCHOR_ENABLED: 'false'
+          TS_ANCHOR_CHART_ENABLED: 'false'
+          PROBABILISTIC_TOOLS_ENABLED: 'false'
+          BINARY_STACKING_ENABLED: 'false'
+          MC_STACKING_ENABLED: 'false'
+          NUMERIC_STACKING_ENABLED: 'false'
+          PERSIST_RESEARCH_ENABLED: 'false'
+          RAW_RESEARCH_LOG_ENABLED: 'false'
+        run: uv run --frozen python g3_development_bridge.py "$FAMILY" "$CANDIDATE" evidence "$EXPECTED"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: g3-bridge-${{ matrix.family }}-${{ matrix.candidate }}
+          path: upstream/g3-development-bridge.json
+          if-no-files-found: error
+  reconcile:
+    needs: bridge
+    if: always() && github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: g3-bridge-*
+          path: incoming
+      - name: Preserve mock bridge receipts and blockers
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          ready=[];blocked=[]
+          for group,keys in (("bls",("cpi","payroll","openings")),("eurostat",("hicp","retail","unemployment"))):
+              for k in keys:
+                  p=Path("incoming")/("g3-bridge-"+group+"-"+k)/"g3-development-bridge.json"
+                  if not p.exists():blocked.append(group+"-"+k);continue
+                  d=json.loads(p.read_bytes())
+                  assert d["status"]=="NATIVE_MOCK_DEVELOPMENT_BRIDGE_PASS" and d["network_blocked"] is True and d["inference_calls"]==d["published"]==d["actual_outcomes_scored"]==0 and not d["live_admitted"]
+                  ready.append(d)
+          assert len({r["event_id"] for r in ready})==len(ready)
+          out={"ready":ready,"blocked":blocked,"real_inference":0,"confirmatory_pairs":0,"live_admitted":False}
+          Path("g3-bridge-final.json").write_text(json.dumps(out,sort_keys=True))
+          print("G3_BRIDGE_FINAL="+json.dumps(out,sort_keys=True))
+          if blocked:raise SystemExit(1)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: g3-bridge-final
+          path: g3-bridge-final.json
+          if-no-files-found: error

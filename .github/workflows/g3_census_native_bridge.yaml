@@ -1,0 +1,158 @@
+name: G3 Census native offline development bridge
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/g3_census_native_bridge.yaml']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  bridge:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include:
+          - family: census
+            group: M3ADV
+            source_run: 45743246873
+            source_artifact: census-bulk-M3ADV
+            definition_run: 45743772441
+            definition_artifact: census-development-M3ADV
+            cases: '{"M3ADV":"b7e8a0d8116c8cdd74cce15db593ea2a32523a3e52b0327d4e05a8942093f883"}'
+          - family: census
+            group: BFS
+            source_run: 45743246873
+            source_artifact: census-bulk-BFS
+            definition_run: 45743772441
+            definition_artifact: census-development-BFS
+            cases: '{"BFS":"9a0e869ade79b7ed16437e077029f83b6a5711e52c37bdace15710e084cbbfce"}'
+          - family: census
+            group: FTD
+            source_run: 45743246873
+            source_artifact: census-bulk-FTD
+            definition_run: 45743772441
+            definition_artifact: census-development-FTD
+            cases: '{"FTD":"0413cb6b4446631bc3a0c4766b8da737ffca0e0fa1710b2875eecd8258c93aa2"}'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v5
+        with:
+          repository: No-Stream/nostreambot-metaculus-bot
+          ref: 79c1d7a1192a00724646ab05c67f3b776d2d7b65
+          path: upstream
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
+          python-version: '3.12'
+      - name: Install exact pinned engine and reused local modules
+        run: |
+          test "$(git -C upstream rev-parse HEAD)" = "79c1d7a1192a00724646ab05c67f3b776d2d7b65"
+          cp research/nostream_runner.py research/nostream_free_f0.py research/nostream_free_f2.py research/nostream_free_f3.py research/g2_diverse_evidence.py research/g2_diverse_cases.json research/g3_bls_candidates.py research/g3_bls_rolling.py research/g3_bls_resolution.py research/g3_eurostat_source_probe.py research/g3_eurostat_development.py research/g3_eurostat_country_development.py research/g3_cross_domain_sources.py research/g3_cross_domain_development.py research/g3_census_development.py research/g3_development_bridge.py upstream/
+          cd upstream
+          uv sync --dev --frozen
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.source_artifact }}
+          run-id: ${{ matrix.source_run }}
+          github-token: ${{ github.token }}
+          path: upstream/evidence/source
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.definition_artifact }}
+          run-id: ${{ matrix.definition_run }}
+          github-token: ${{ github.token }}
+          path: upstream/evidence/definition
+      - name: Run native mock bridge per frozen event with sockets blocked
+        working-directory: upstream
+        env:
+          OPENROUTER_API_KEY: dummy-offline
+          NOSTREAM_G2: 'true'
+          NOSTREAM_QUESTION_TYPE: binary
+          NOSTREAM_F3_CASE: F301
+          FAMILY: ${{ matrix.family }}
+          CASES: ${{ matrix.cases }}
+          NATIVE_SEARCH_ENABLED: 'false'
+          FINANCIAL_DATA_ENABLED: 'false'
+          GEMINI_SEARCH_ENABLED: 'false'
+          GAP_FILL_ENABLED: 'false'
+          GAP_FILL_V2_ENABLED: 'false'
+          PREDICTION_MARKETS_ENABLED: 'false'
+          RESOLUTION_SOURCE_ENABLED: 'false'
+          RESOLUTION_SOURCE_URL_CONTEXT_ENABLED: 'false'
+          TS_ANCHOR_ENABLED: 'false'
+          TS_ANCHOR_CHART_ENABLED: 'false'
+          PROBABILISTIC_TOOLS_ENABLED: 'false'
+          BINARY_STACKING_ENABLED: 'false'
+          MC_STACKING_ENABLED: 'false'
+          NUMERIC_STACKING_ENABLED: 'false'
+          PERSIST_RESEARCH_ENABLED: 'false'
+          RAW_RESEARCH_LOG_ENABLED: 'false'
+        run: |
+          uv run --frozen python - <<'PY'
+          import json,os,subprocess,sys
+          from pathlib import Path
+          family=os.environ["FAMILY"]
+          out=Path("receipts");out.mkdir()
+          blocked=[]
+          for k,h in json.loads(os.environ["CASES"]).items():
+              p=Path("g3-development-bridge.json");p.unlink(missing_ok=True)
+              proc=subprocess.run([sys.executable,"g3_development_bridge.py",family,k,"evidence",h])
+              if proc.returncode or not p.exists():
+                  blocked.append(k);continue
+              p.rename(out/(family+"-"+k.replace(":","-")+".json"))
+          print("GROUP_BLOCKED="+json.dumps(blocked))
+          if blocked:raise SystemExit(1)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: census-bridge-${{ matrix.group }}
+          path: upstream/receipts/
+          if-no-files-found: error
+  reconcile:
+    needs: bridge
+    if: always() && github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: census-bridge-*
+          path: incoming
+      - name: Consolidate new native receipts without real inference
+        env:
+          EXPECTED: '{"census-M3ADV":"b7e8a0d8116c8cdd74cce15db593ea2a32523a3e52b0327d4e05a8942093f883","census-BFS":"9a0e869ade79b7ed16437e077029f83b6a5711e52c37bdace15710e084cbbfce","census-FTD":"0413cb6b4446631bc3a0c4766b8da737ffca0e0fa1710b2875eecd8258c93aa2"}'
+        run: |
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          expected=json.loads(os.environ["EXPECTED"]); found={}
+          for p in Path("incoming").rglob("*.json"):
+              k=p.stem
+              assert k in expected and k not in found
+              d=json.loads(p.read_bytes())
+              assert d["definition_sha256"]==expected[k] and d["synthetic_aggregate"]==.5
+              assert d["network_blocked"] is True and d["inference_calls"]==d["published"]==d["actual_outcomes_scored"]==0
+              assert d["source_hash_scope"]=="pinned_census_csv_member" and not d["live_admitted"] and not d["confirmatory_eligible"]
+              found[k]=d
+          blocked=sorted(set(expected)-set(found))
+          assert len({d["local_qid"] for d in found.values()})==len(found)
+          result={"ready":found,"blocked":blocked,"count":len(found),"real_inference":0,"confirmatory_pairs":0,"live_admitted":False}
+          Path("census-native-final.json").write_text(json.dumps(result,sort_keys=True))
+          print("CENSUS_NATIVE_FINAL="+json.dumps(result,sort_keys=True))
+          if blocked:raise SystemExit(1)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: census-native-final
+          path: census-native-final.json
+          if-no-files-found: error

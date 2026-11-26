@@ -1,0 +1,75 @@
+name: No-Stream F1 offline qualification
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/nostream_free_f1_offline.yaml']
+permissions:
+  contents: read
+jobs:
+  check:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v5
+        with:
+          repository: No-Stream/nostreambot-metaculus-bot
+          ref: 79c1d7a1192a00724646ab05c67f3b776d2d7b65
+          path: upstream
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
+          python-version: '3.12'
+      - name: Verify pinned source and prepare
+        run: |
+          test "$(git -C upstream rev-parse HEAD)" = "79c1d7a1192a00724646ab05c67f3b776d2d7b65"
+          cp research/nostream_runner.py research/nostream_free_f0.py upstream/
+          cd upstream
+          uv sync --dev --frozen
+      - name: Test F1 with no real key or network inference
+        working-directory: upstream
+        env:
+          OPENROUTER_API_KEY: dummy-offline
+          NOSTREAM_FREE_CANDIDATE: F1
+        run: |
+          uv run --frozen python - <<'PY'
+          import asyncio, io, json
+          from unittest.mock import patch
+          from urllib.error import HTTPError
+          import nostream_free_f0 as f
+          assert f.CANDIDATE == "F1"
+          assert f.ROSTERS["F0"][:2] == f.ROSTER[:2]
+          assert f.ROSTER[2] == "google/gemma-4-31b-it:free"
+          assert f.ROSTERS["F0"][2] not in f.ALLOW
+          assert len(f.ROSTER)==3 and f.UTILITY not in f.ROSTER
+          assert all(m.endswith(":free") for m in f.ALLOW)
+          for m in f.ALLOW:
+              p=f.payload_for(m,"test")
+              assert p["model"]==m and not p["provider"]["allow_fallbacks"]
+              assert all(v==0 for v in p["provider"]["max_price"].values())
+          with patch.object(f,"request",side_effect=AssertionError("no dispatch")) as req:
+              try: asyncio.run(f.main())
+              except f.StopBudget as e: assert "F1 inference gated" in str(e)
+              else: raise AssertionError("missing gate")
+              assert req.call_count==0
+          def fail(source):
+              return HTTPError("https://openrouter.ai/api/v1/chat/completions",429,"limited",
+                {"Retry-After":"60","X-RateLimit-Remaining":"0","Authorization":"secret"},
+                io.BytesIO(json.dumps({"error":{"message":"secret","metadata":{"limit_source":source}}}).encode()))
+          assert f.http_diagnostics(fail("upstream_provider_shared_pool")) == {"http":429,"limit_source":"upstream_provider_shared_pool","retry-after":60,"x-ratelimit-remaining":0}
+          assert f.http_diagnostics(fail("untrusted-secret"))["limit_source"]=="unknown"
+          with patch.object(f,"request",side_effect=fail("openrouter_free_tier_per_day")) as req:
+              try: f.invoke_sync(f.ROSTER[0],"test")
+              except RuntimeError: pass
+              else: raise AssertionError("429 not raised")
+              assert f.stopped and f.ledger[-1]["limit_source"]=="openrouter_free_tier_per_day"
+              try: f.invoke_sync(f.ROSTER[1],"test")
+              except f.StopBudget: pass
+              else: raise AssertionError("stop failed")
+              assert req.call_count==1
+          print("F1_OFFLINE_PASS: single roster replacement, zero prices, gate, redacted 429 source, global stop; simulated network only")
+          PY

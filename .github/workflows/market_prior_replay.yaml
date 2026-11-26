@@ -1,0 +1,100 @@
+name: New-source market calibration (sealed test)
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: [".github/workflows/market_prior_replay.yaml"]
+permissions:
+  contents: read
+jobs:
+  prepare:
+    if: contains(github.event.head_commit.message, '[market-prior]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install numpy==2.2.6
+      - name: Fetch archive and build new-source cohort
+        run: |
+          curl --fail --location --retry 2 --max-time 300 --max-filesize 300000000 "https://www.forecastbench.org/assets/data/processed-forecast-sets/processed_forecast_sets.tar.gz" -o /tmp/archive.tar.gz
+          python research/market_prior_replay.py prepare /tmp/archive.tar.gz /tmp/market
+      - uses: actions/upload-artifact@v4
+        with:
+          name: market-development
+          path: /tmp/market/dev.json
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: market-inputs
+          path: /tmp/market/inputs.json
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: market-labels
+          path: /tmp/market/labels.json
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: market-manifest
+          path: /tmp/market/manifest.json
+          if-no-files-found: error
+  fit:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install 'scikit-learn==1.7.2' 'numpy==2.2.6' 'scipy==1.15.3' 'joblib==1.5.2' 'threadpoolctl==3.6.0'
+      - uses: actions/download-artifact@v4
+        with:
+          name: market-development
+          path: /tmp/market
+      - uses: actions/download-artifact@v4
+        with:
+          name: market-inputs
+          path: /tmp/market
+      - name: Fit and freeze before accessing test outcomes
+        run: |
+          test ! -f /tmp/market/labels.json
+          OMP_NUM_THREADS=2 OPENBLAS_NUM_THREADS=2 python research/market_prior_replay.py fit /tmp/market/dev.json /tmp/market/inputs.json /tmp/market/predictions.json
+          test ! -f /tmp/market/labels.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: market-frozen-predictions
+          path: /tmp/market/predictions.json
+          if-no-files-found: error
+  score:
+    needs: [prepare,fit]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install numpy==2.2.6
+      - uses: actions/download-artifact@v4
+        with:
+          name: market-frozen-predictions
+          path: /tmp/market
+      - uses: actions/download-artifact@v4
+        with:
+          name: market-inputs
+          path: /tmp/market
+      - uses: actions/download-artifact@v4
+        with:
+          name: market-labels
+          path: /tmp/market
+      - run: python research/market_prior_replay.py score /tmp/market/predictions.json /tmp/market/inputs.json /tmp/market/labels.json /tmp/market/report.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: market-scoring-report
+          path: /tmp/market/report.json
+          if-no-files-found: error
+
+# Retry with expanded development coverage; new-source test remains sealed.

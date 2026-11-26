@@ -1,0 +1,59 @@
+name: No-Stream direct Gemma 26B utility public-data smoke
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/nostream_gemma_smoke.yaml']
+permissions:
+  contents: read
+concurrency:
+  group: nostream-free-f0-once
+  cancel-in-progress: false
+jobs:
+  probe:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Read metadata then one bounded free-only Gemma request
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+        run: |
+          python3 -I - <<'PY'
+          import os,json,urllib.request,urllib.error,hashlib,time,math,re
+          key=os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+          print("GEMMA_KEY_PRESENT="+json.dumps({"GEMINI_API_KEY":bool(os.getenv("GEMINI_API_KEY")),"GOOGLE_API_KEY":bool(os.getenv("GOOGLE_API_KEY"))}),flush=True)
+          if not key:raise SystemExit("BLOCK: no GitHub runtime key")
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self,*args,**kwargs):return None
+          opener=urllib.request.build_opener(NoRedirect)
+          model="gemma-4-26b-a4b-it"
+          url="https://generativelanguage.googleapis.com/v1beta/models/"+model
+          def request(suffix="",payload=None):
+              h={"x-goog-api-key":key,"Accept":"application/json"}
+              if payload is not None:h["Content-Type"]="application/json"
+              with opener.open(urllib.request.Request(url+suffix,headers=h,data=None if payload is None else json.dumps(payload).encode()),timeout=90) as r:
+                  return json.load(r)
+          try:
+              meta=request()
+              print("GEMMA_METADATA="+json.dumps({k:meta.get(k) for k in ("name","inputTokenLimit","outputTokenLimit","supportedGenerationMethods")}),flush=True)
+              if meta.get("name")!="models/"+model or "generateContent" not in meta.get("supportedGenerationMethods",[]) or meta.get("outputTokenLimit",0)<4096:
+                  raise SystemExit("BLOCK: identity or generation capability unverified")
+              prompt="Synthetic noncontest test. A fair six-sided die is rolled twice independently. YES if at least one roll is a six. Estimate probability with a short rationale, then append a fenced JSON block containing exactly question_type (binary) and posterior_prob (number between 0 and 1). Do not use tools."
+              t=time.monotonic()
+              # Separate existing utility model availability probe; not F1 roster qualification. No retries.
+              payload={"contents":[{"role":"user","parts":[{"text":prompt}]}],"generationConfig":{"maxOutputTokens":4096,"candidateCount":1}}
+              body=request(":generateContent",payload)
+              choice=body["candidates"][0]
+              content="".join(p.get("text","") for p in choice.get("content",{}).get("parts",[]) if not p.get("thought"))
+              match=re.search(r"```json\s*(.*?)\s*```",content,re.S)
+              result=json.loads(match.group(1)) if match else {}
+              p=result.get("posterior_prob")
+              passed=(body.get("modelVersion")==model and choice.get("finishReason")=="STOP" and result.get("question_type")=="binary" and isinstance(p,(int,float)) and not isinstance(p,bool) and math.isfinite(p) and 0<=p<=1)
+              print("GEMMA_SMOKE="+json.dumps({"http":200,"requested_model":model,"returned_model":body.get("modelVersion"),"response_id":body.get("responseId"),"finish":choice.get("finishReason"),"usage":{k:v for k,v in body.get("usageMetadata",{}).items() if type(v) is int},"probability":p if passed else None,"passed":passed,"seconds":round(time.monotonic()-t,2),"prompt_sha256":hashlib.sha256(prompt.encode()).hexdigest(),"response_sha256":hashlib.sha256(content.encode()).hexdigest()}),flush=True)
+              if not passed:raise SystemExit("BLOCK: structured response unverified")
+          except urllib.error.HTTPError as e:
+              retry=e.headers.get("Retry-After","") if e.headers else ""
+              print("GEMMA_HTTP="+json.dumps({"http":e.code,"retry_after_seconds":int(retry) if retry.isdigit() and len(retry)<8 else None}),flush=True)
+              raise SystemExit("BLOCK: provider rejected request")
+          PY

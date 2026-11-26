@@ -1,0 +1,203 @@
+name: G3 extended native offline development bridge
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/g3_extended_development_bridge.yaml']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  bridge:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        include:
+          - family: country
+            group: DE
+            source_run: 45741970010
+            source_artifact: eurostat-country-DE
+            definition_run: 45742397543
+            definition_artifact: country-definition-DE
+            cases: '{"DE:hicp":"dddc3fa4dc743f5f351d3aa1cd89293c0b5b05f44a62421f52e18dc9d803719d","DE:retail":"29375c7d32e08c233ffc56c02a8dc840e1313f3a6a38c4e91b2b47b41a6a49ba","DE:unemployment":"221f7708f1d4cd763c8c14c05768e2987af1a43bc528e7861e654975060af6d9"}'
+          - family: country
+            group: ES
+            source_run: 45741970010
+            source_artifact: eurostat-country-ES
+            definition_run: 45742397543
+            definition_artifact: country-definition-ES
+            cases: '{"ES:hicp":"547712c1d54408d9de3b2c0fa8a927d88fd730235da8fb5042c42c03a5b2fa93","ES:retail":"2383101a951166db96a4626dc977bb8fddf2dafac7e686af5715f5912c137268","ES:unemployment":"d4a9111fe036b0b8a78ec8b3ea65bcba275aa56b76133347e73b661b298a3886"}'
+          - family: country
+            group: IT
+            source_run: 45741970010
+            source_artifact: eurostat-country-IT
+            definition_run: 45742397543
+            definition_artifact: country-definition-IT
+            cases: '{"IT:hicp":"8f2940fc06a0ed4a290a7909f022acd40f344d24836b01e50fa583a986b37794","IT:retail":"541f40419de3a0dc22b83968829c2e0cc30907a83d21ab2fcf49a47bbfbd39be","IT:unemployment":"614751596627afc968185bc0eb4df7fdeb4a508d11244e87d35b8b19a4b1c383"}'
+          - family: country
+            group: NL
+            source_run: 45741970010
+            source_artifact: eurostat-country-NL
+            definition_run: 45742397543
+            definition_artifact: country-definition-NL
+            cases: '{"NL:hicp":"641d51a377b4455dd4bc6e49e364c1e641fbbf36f9202fc538f735d09e58ede4","NL:retail":"47d67d748395155455aff4c9a61cecf8fe8f5b525e1c78d3098bb98fe3afcbd8","NL:unemployment":"20ed4bdd273d74df71d365fba3dfa3ecdecd6185dcfc0fb788a5c3f5dad4fe40"}'
+          - family: country
+            group: PL
+            source_run: 45741970010
+            source_artifact: eurostat-country-PL
+            definition_run: 45742397543
+            definition_artifact: country-definition-PL
+            cases: '{"PL:hicp":"1e7dbdef2e22e80f52508aacbdfb1cb54f9a628d16fa19ca1a6c049ac6f7ee37","PL:retail":"a6a0e11be7bdf8c6a6ce623dc3f845853622fccfb2e76bbbd0a3b27321198e7b","PL:unemployment":"ef412f652927a9b3ae33b005fc04574da61c2c10d2f3c2c568584f033e4d2300"}'
+          - family: country
+            group: SE
+            source_run: 45741970010
+            source_artifact: eurostat-country-SE
+            definition_run: 45742397543
+            definition_artifact: country-definition-SE
+            cases: '{"SE:hicp":"cb2502fb5bbc871a08e8049ebaea8a9bee355f7ab248930892ad1f616efb18ce","SE:retail":"30cdc9d69c585f07dc4a55111acd6abbbb973d79bfe08dbb96ccf0b9efc0033c","SE:unemployment":"8924bf824d565d48e0b0d2a45030474cf37e0c5b3ee2c0a49437a24da50bed50"}'
+          - family: cross
+            group: nao
+            source_run: 45741785164
+            source_artifact: cross-domain-nao
+            definition_run: 45742547902
+            definition_artifact: cross-domain-definition-nao
+            cases: '{"nao":"fe7ead1d56e2fe5e34f8d1fe5dbcb984a0f1b9b8f3787bc89686b98882054ab1"}'
+          - family: cross
+            group: oil
+            source_run: 45741785164
+            source_artifact: cross-domain-oil
+            definition_run: 45742547902
+            definition_artifact: cross-domain-definition-oil
+            cases: '{"oil":"0aa48d6950f64d61e6db72c1dc6f19d85ca708c049c4cdd3893e78d694a4fd5f"}'
+          - family: cross
+            group: river
+            source_run: 45741785164
+            source_artifact: cross-domain-river
+            definition_run: 45742547902
+            definition_artifact: cross-domain-definition-river
+            cases: '{"river":"32317a94bc3776e69f23e59f64b70cabceef0406baa49523efce067a49c26b3c"}'
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v5
+        with:
+          repository: No-Stream/nostreambot-metaculus-bot
+          ref: 79c1d7a1192a00724646ab05c67f3b776d2d7b65
+          path: upstream
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: false
+          python-version: '3.12'
+      - name: Install exact pinned engine and reused local modules
+        run: |
+          test "$(git -C upstream rev-parse HEAD)" = "79c1d7a1192a00724646ab05c67f3b776d2d7b65"
+          cp research/nostream_runner.py research/nostream_free_f0.py research/nostream_free_f2.py research/nostream_free_f3.py research/g2_diverse_evidence.py research/g2_diverse_cases.json research/g3_bls_candidates.py research/g3_bls_rolling.py research/g3_bls_resolution.py research/g3_eurostat_source_probe.py research/g3_eurostat_development.py research/g3_eurostat_country_development.py research/g3_cross_domain_sources.py research/g3_cross_domain_development.py research/g3_development_bridge.py upstream/
+          cd upstream
+          uv sync --dev --frozen
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.source_artifact }}
+          run-id: ${{ matrix.source_run }}
+          github-token: ${{ github.token }}
+          path: upstream/evidence/source
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.definition_artifact }}
+          run-id: ${{ matrix.definition_run }}
+          github-token: ${{ github.token }}
+          path: upstream/evidence/definition
+      - name: Run native mock bridge per frozen event with sockets blocked
+        working-directory: upstream
+        env:
+          OPENROUTER_API_KEY: dummy-offline
+          NOSTREAM_G2: 'true'
+          NOSTREAM_QUESTION_TYPE: binary
+          NOSTREAM_F3_CASE: F301
+          FAMILY: ${{ matrix.family }}
+          CASES: ${{ matrix.cases }}
+          NATIVE_SEARCH_ENABLED: 'false'
+          FINANCIAL_DATA_ENABLED: 'false'
+          GEMINI_SEARCH_ENABLED: 'false'
+          GAP_FILL_ENABLED: 'false'
+          GAP_FILL_V2_ENABLED: 'false'
+          PREDICTION_MARKETS_ENABLED: 'false'
+          RESOLUTION_SOURCE_ENABLED: 'false'
+          RESOLUTION_SOURCE_URL_CONTEXT_ENABLED: 'false'
+          TS_ANCHOR_ENABLED: 'false'
+          TS_ANCHOR_CHART_ENABLED: 'false'
+          PROBABILISTIC_TOOLS_ENABLED: 'false'
+          BINARY_STACKING_ENABLED: 'false'
+          MC_STACKING_ENABLED: 'false'
+          NUMERIC_STACKING_ENABLED: 'false'
+          PERSIST_RESEARCH_ENABLED: 'false'
+          RAW_RESEARCH_LOG_ENABLED: 'false'
+        run: |
+          uv run --frozen python - <<'PY'
+          import json,os,subprocess,sys
+          from pathlib import Path
+          family=os.environ["FAMILY"]
+          out=Path("receipts");out.mkdir()
+          blocked=[]
+          for k,h in json.loads(os.environ["CASES"]).items():
+              p=Path("g3-development-bridge.json");p.unlink(missing_ok=True)
+              proc=subprocess.run([sys.executable,"g3_development_bridge.py",family,k,"evidence",h])
+              if proc.returncode or not p.exists():
+                  blocked.append(k);continue
+              p.rename(out/(family+"-"+k.replace(":","-")+".json"))
+          print("GROUP_BLOCKED="+json.dumps(blocked))
+          if blocked:raise SystemExit(1)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: extended-bridge-${{ matrix.family }}-${{ matrix.group }}
+          path: upstream/receipts/
+          if-no-files-found: error
+  reconcile:
+    needs: bridge
+    if: always() && github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: extended-bridge-*
+          path: incoming
+      - name: Verify pinned definition hashes and consolidate new cases
+        env:
+          EXPECTED: '{"country-DE-hicp":"dddc3fa4dc743f5f351d3aa1cd89293c0b5b05f44a62421f52e18dc9d803719d","country-DE-retail":"29375c7d32e08c233ffc56c02a8dc840e1313f3a6a38c4e91b2b47b41a6a49ba","country-DE-unemployment":"221f7708f1d4cd763c8c14c05768e2987af1a43bc528e7861e654975060af6d9","country-ES-hicp":"547712c1d54408d9de3b2c0fa8a927d88fd730235da8fb5042c42c03a5b2fa93","country-ES-retail":"2383101a951166db96a4626dc977bb8fddf2dafac7e686af5715f5912c137268","country-ES-unemployment":"d4a9111fe036b0b8a78ec8b3ea65bcba275aa56b76133347e73b661b298a3886","country-IT-hicp":"8f2940fc06a0ed4a290a7909f022acd40f344d24836b01e50fa583a986b37794","country-IT-retail":"541f40419de3a0dc22b83968829c2e0cc30907a83d21ab2fcf49a47bbfbd39be","country-IT-unemployment":"614751596627afc968185bc0eb4df7fdeb4a508d11244e87d35b8b19a4b1c383","country-NL-hicp":"641d51a377b4455dd4bc6e49e364c1e641fbbf36f9202fc538f735d09e58ede4","country-NL-retail":"47d67d748395155455aff4c9a61cecf8fe8f5b525e1c78d3098bb98fe3afcbd8","country-NL-unemployment":"20ed4bdd273d74df71d365fba3dfa3ecdecd6185dcfc0fb788a5c3f5dad4fe40","country-PL-hicp":"1e7dbdef2e22e80f52508aacbdfb1cb54f9a628d16fa19ca1a6c049ac6f7ee37","country-PL-retail":"a6a0e11be7bdf8c6a6ce623dc3f845853622fccfb2e76bbbd0a3b27321198e7b","country-PL-unemployment":"ef412f652927a9b3ae33b005fc04574da61c2c10d2f3c2c568584f033e4d2300","country-SE-hicp":"cb2502fb5bbc871a08e8049ebaea8a9bee355f7ab248930892ad1f616efb18ce","country-SE-retail":"30cdc9d69c585f07dc4a55111acd6abbbb973d79bfe08dbb96ccf0b9efc0033c","country-SE-unemployment":"8924bf824d565d48e0b0d2a45030474cf37e0c5b3ee2c0a49437a24da50bed50","cross-nao":"fe7ead1d56e2fe5e34f8d1fe5dbcb984a0f1b9b8f3787bc89686b98882054ab1","cross-oil":"0aa48d6950f64d61e6db72c1dc6f19d85ca708c049c4cdd3893e78d694a4fd5f","cross-river":"32317a94bc3776e69f23e59f64b70cabceef0406baa49523efce067a49c26b3c"}'
+        run: |
+          python3 - <<'PY'
+          import json,os
+          from pathlib import Path
+          expected=json.loads(os.environ["EXPECTED"])
+          found={};blocked=[]
+          for p in Path("incoming").rglob("*.json"):
+              k=p.stem
+              assert k in expected and k not in found,"unexpected/duplicate receipt"
+              d=json.loads(p.read_bytes())
+              assert d["definition_sha256"]==expected[k] and d["status"]=="NATIVE_MOCK_DEVELOPMENT_BRIDGE_PASS"
+              assert d["network_blocked"] is True and d["inference_calls"]==d["published"]==d["actual_outcomes_scored"]==0
+              assert not d["live_admitted"] and not d["confirmatory_eligible"]
+              assert d["synthetic_aggregate"]==.5
+              found[k]=d
+          blocked=sorted(set(expected)-set(found))
+          assert len({d["event_id"] for d in found.values()})==len(found)
+          assert len({d["local_qid"] for d in found.values()})==len(found)
+          out={"count":len(found),"expected":len(expected),"ready":found,"blocked":blocked,"real_inference":0,"confirmatory_pairs":0,"live_admitted":False}
+          Path("g3-extended-bridge-final.json").write_text(json.dumps(out,sort_keys=True))
+          print("EXTENDED_BRIDGE_FINAL="+json.dumps({k:v for k,v in out.items() if k!="ready"},sort_keys=True))
+          if blocked:raise SystemExit(1)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: g3-extended-bridge-final
+          path: g3-extended-bridge-final.json
+          if-no-files-found: error

@@ -1,0 +1,63 @@
+name: G3 three new cross-domain source probes
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/g3_cross_domain_sources.yaml']
+permissions:
+  contents: read
+jobs:
+  source:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        candidate: [nao,oil,river]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Public historical source only
+        env:
+          CANDIDATE: ${{ matrix.candidate }}
+        run: python3 research/g3_cross_domain_sources.py "$CANDIDATE"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cross-domain-${{ matrix.candidate }}
+          path: cross-domain.json
+          if-no-files-found: error
+  reconcile:
+    needs: source
+    if: always() && github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: cross-domain-*
+          path: incoming
+      - name: Consolidate available source results without replacing failures
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          reports={};blocked=[]
+          for candidate in ("nao","oil","river"):
+              p=Path("incoming")/("cross-domain-"+candidate)/"cross-domain.json"
+              if not p.exists():
+                  blocked.append(candidate);continue
+              d=json.loads(p.read_bytes())
+              assert d["candidate"]==candidate and d["inference_calls"]==d["outcomes_accessed"]==0 and d["promotion_authorized"] is False
+              reports[candidate]={k:v for k,v in d.items() if k not in ("rows","labels")}
+          result={"reports":reports,"blocked":blocked,"inference_calls":0,"confirmatory_pairs":0,"promotion_authorized":False}
+          Path("cross-domain-final.json").write_text(json.dumps(result,sort_keys=True))
+          print("CROSS_DOMAIN_FINAL="+json.dumps(result,sort_keys=True))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cross-domain-final
+          path: cross-domain-final.json
+          if-no-files-found: error

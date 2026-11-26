@@ -1,0 +1,71 @@
+name: G3 official Census bulk source transport qualification
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/g3_census_bulk_probe.yaml', 'research/g3_census_bulk_probe.py']
+permissions:
+  contents: read
+jobs:
+  probe:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        program: [M3ADV,BFS,FTD]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Fetch public bulk archive; no credentials
+        env:
+          PROGRAM: ${{ matrix.program }}
+        run: python3 research/g3_census_bulk_probe.py "$PROGRAM"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: census-bulk-${{ matrix.program }}
+          path: |
+            census-original-source.bin
+            census-public-source.zip
+            census-source-receipt.json
+          if-no-files-found: error
+  reconcile:
+    needs: probe
+    if: always() && github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: census-bulk-*
+          path: incoming
+      - run: |
+          python3 - <<'PY'
+          import hashlib,json
+          from pathlib import Path
+          reports={};blocked=[]
+          for k in ("M3ADV","BFS","FTD"):
+              try:
+                  p=Path("incoming")/("census-bulk-"+k)
+                  d=json.loads((p/"census-source-receipt.json").read_text())
+                  raw=(p/"census-original-source.bin").read_bytes()
+                  safe=(p/"census-public-source.zip").read_bytes()
+                  if d["program"]!=k or hashlib.sha256(raw).hexdigest()!=d["archive_sha256"] or hashlib.sha256(safe).hexdigest()!=d["normalized_archive_sha256"] or d["inference_calls"]!=0 or d["actual_outcomes_accessed"]!=0 or d["confirmatory_eligible"] is not False:
+                      raise ValueError("receipt")
+                  reports[k]=d
+              except (OSError,ValueError,KeyError,TypeError):
+                  blocked.append(k)
+          out={"status":"BULK_TRANSPORT_PASS" if not blocked else "PARTIAL_BLOCK","reports":reports,"blocked":blocked,"inference_calls":0,"actual_outcomes_accessed":0,"confirmatory_pairs":0}
+          Path("census-bulk-final.json").write_text(json.dumps(out,sort_keys=True))
+          print("CENSUS_BULK_FINAL="+json.dumps(out,sort_keys=True))
+          if blocked:raise SystemExit(1)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: census-bulk-final
+          path: census-bulk-final.json
+          if-no-files-found: error

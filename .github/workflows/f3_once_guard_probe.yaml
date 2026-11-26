@@ -1,0 +1,42 @@
+name: F3 one-shot duplicate trigger proof (offline)
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/f3_once_guard_probe.yaml']
+permissions:
+  contents: read
+jobs:
+  admission:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Same workflow-number and attempt guard as inert live template
+        run: |
+          echo "F3_PROBE_CONTEXT run=$GITHUB_RUN_ID number=$GITHUB_RUN_NUMBER attempt=$GITHUB_RUN_ATTEMPT"
+          test "$GITHUB_RUN_NUMBER" = 1
+          test "$GITHUB_RUN_ATTEMPT" = 1
+  protected:
+    needs: admission
+    if: github.run_number == 1 && github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - run: echo "F3_PROBE_PROTECTED_REACHED no_secrets=true no_inference=true"
+  receipt:
+    needs: [admission, protected]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    env:
+      ADMISSION: ${{ needs.admission.result }}
+      PROTECTED: ${{ needs.protected.result }}
+    steps:
+      - run: |
+          if test "$GITHUB_RUN_NUMBER" = 1 && test "$GITHUB_RUN_ATTEMPT" = 1; then
+            test "$ADMISSION" = success && test "$PROTECTED" = success
+          else
+            test "$ADMISSION" = failure && test "$PROTECTED" = skipped
+          fi
+          echo "F3_PROBE_RECEIPT_PASS number=$GITHUB_RUN_NUMBER attempt=$GITHUB_RUN_ATTEMPT admission=$ADMISSION protected=$PROTECTED"
+
+# Deliberate second distinct push: prove the same workflow identity denies a new run.

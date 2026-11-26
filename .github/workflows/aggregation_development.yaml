@@ -1,0 +1,82 @@
+name: Archived aggregation development experiment — new snapshot
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/aggregation_development.yaml']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  prepare:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Capture current licensed archive as distinct development snapshot
+        run: |
+          curl --fail --location --max-time 300 --max-filesize 300000000 https://www.forecastbench.org/assets/data/processed-forecast-sets/processed_forecast_sets.tar.gz -o /tmp/forecastbench.tar.gz
+          sha256sum /tmp/forecastbench.tar.gz | tee /tmp/archive.sha256
+          stat -c 'ARCHIVE_BYTES=%s' /tmp/forecastbench.tar.gz
+      - name: Reuse existing reader and extract development-only ballots
+        run: python3 research/aggregation_development.py prepare /tmp/forecastbench.tar.gz development.json "$(cut -d' ' -f1 /tmp/archive.sha256)"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aggregation-development-input
+          path: development.json
+          if-no-files-found: error
+  evaluate:
+    needs: prepare
+    if: github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        mode: [three,all]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: aggregation-development-input
+      - name: Compare fixed aggregation policies
+        env:
+          MODE: ${{ matrix.mode }}
+        run: python3 research/aggregation_development.py evaluate development.json "$MODE"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: aggregation-development-${{ matrix.mode }}
+          path: aggregation-report.json
+          if-no-files-found: error
+  reconcile:
+    needs: evaluate
+    if: always() && github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: aggregation-development-*
+          path: evidence
+      - name: Consolidate scientific results without promotion
+        run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          reports={}
+          for mode in ("three","all"):
+              p=Path("evidence")/("aggregation-development-"+mode)/"aggregation-report.json"
+              if p.is_file():
+                  r=json.loads(p.read_text())
+                  assert r["mode"]==mode and r["promotion_authorized"] is False and r["inference_calls"]==0
+                  reports[mode]=r
+          print("AGGREGATION_CONSOLIDATED="+json.dumps({"reports":{m:{"decision":r["decision"],"chosen":r["chosen_on_earlier_development"],"gain":r["later_development_gain"]} for m,r in reports.items()},"complete":len(reports)==2,"f3_skill":"UNKNOWN","promotion_authorized":False,"inference_calls":0}))
+          assert len(reports)==2,"incomplete experiment"
+          assert len({r["archive_sha256"] for r in reports.values()})==1,"archive mismatch"
+          PY

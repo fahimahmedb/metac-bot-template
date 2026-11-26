@@ -1,0 +1,62 @@
+name: No-Stream direct Cerebras public-data smoke
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/nostream_cerebras_smoke.yaml']
+permissions:
+  contents: read
+concurrency:
+  group: nostream-free-f0-once
+  cancel-in-progress: false
+jobs:
+  probe:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - name: One bounded GPT OSS and optional Gemma public-data request
+        env:
+          CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
+        run: |
+          python3 -I - <<'PY'
+          import os,json,urllib.request,urllib.error,hashlib,time,math,re
+          key=os.environ["CEREBRAS_API_KEY"]
+          if not key:raise SystemExit("BLOCK missing key")
+          class NoRedirect(urllib.request.HTTPRedirectHandler):
+              def redirect_request(self,*args,**kwargs):return None
+          opener=urllib.request.build_opener(NoRedirect)
+          base="https://api.cerebras.ai/v1"
+          def req(path,payload=None):
+              h={"Authorization":"Bearer "+key,"Accept":"application/json"}
+              if payload is not None:h["Content-Type"]="application/json"
+              with opener.open(urllib.request.Request(base+path,headers=h,data=None if payload is None else json.dumps(payload).encode()),timeout=80) as r:
+                  return json.load(r),{k.lower():v for k,v in r.headers.items() if k.lower().startswith("x-ratelimit-") and re.fullmatch(r"[0-9.]+",v)}
+          prompt="Synthetic noncontest test. A fair six-sided die is rolled twice independently. YES if at least one roll is a six. Estimate probability with a short rationale, then append a fenced JSON block containing exactly question_type (binary) and posterior_prob (number between 0 and 1). Do not use tools."
+          ledger=[]
+          for model in ("gpt-oss-120b","gemma-4-31b"):
+              rec={"model":model,"prompt_sha256":hashlib.sha256(prompt.encode()).hexdigest(),"max_completion_tokens":4096}
+              try:
+                  meta,_=req("/models/"+model)
+                  if meta.get("id")!=model:
+                      rec["status"]="model_identity_unverified";ledger.append(rec);continue
+                  t=time.monotonic()
+                  body,headers=req("/chat/completions",{"model":model,"messages":[{"role":"user","content":prompt}],"max_completion_tokens":4096,"stream":False})
+                  choice=body["choices"][0]
+                  content=choice["message"].get("content") or ""
+                  m=re.search(r"```json\s*(.*?)\s*```",content,re.S)
+                  result=json.loads(m.group(1)) if m else {}
+                  p=result.get("posterior_prob")
+                  passed=(body.get("model")==model and choice.get("finish_reason")=="stop" and result.get("question_type")=="binary" and isinstance(p,(int,float)) and not isinstance(p,bool) and math.isfinite(p) and 0<=p<=1)
+                  rec.update({"http":200,"id":body.get("id"),"returned_model":body.get("model"),"finish":choice.get("finish_reason"),"usage":{k:v for k,v in body.get("usage",{}).items() if k in ("prompt_tokens","completion_tokens","total_tokens") and type(v) is int},"rate_headers":headers,"probability":p if passed else None,"seconds":round(time.monotonic()-t,2),"passed":passed,"response_sha256":hashlib.sha256(content.encode()).hexdigest()})
+              except urllib.error.HTTPError as e:
+                  rec.update({"http":e.code,"passed":False})
+                  ledger.append(rec)
+                  if e.code in (401,402,403,429):break
+                  continue
+              except Exception as e:
+                  rec.update({"error":type(e).__name__,"passed":False})
+                  ledger.append(rec);break
+              ledger.append(rec)
+          print("DIRECT_SMOKE="+json.dumps(ledger,sort_keys=True))
+          if not ledger or not ledger[0].get("passed"):raise SystemExit("BLOCK: GPT OSS probe failed")
+          PY

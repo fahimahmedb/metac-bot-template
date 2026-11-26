@@ -1,0 +1,78 @@
+name: F3 hosted Quant-Trade contract export (read only)
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/f3_quant_handoff.yaml']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  export:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/checkout@v5
+        with:
+          repository: fahimahmedb/Quant-Trade
+          ref: aaebcb760be631585cc84cd67b2cff9cea0ae492
+          path: qt-contract
+          sparse-checkout: research/research_os/contracts
+          persist-credentials: false
+      - name: Check exact reused contract and finalizer blobs
+        run: |
+          test "$(git -C qt-contract rev-parse HEAD)" = "aaebcb760be631585cc84cd67b2cff9cea0ae492"
+          test "$(git hash-object qt-contract/research/research_os/contracts/experiment-result.schema.json)" = "0e84ce4620a3d423b9712023a1ea91caa986c2e7"
+          test "$(git hash-object qt-contract/research/research_os/contracts/evidence-assessment.schema.json)" = "cf4dc6d9439b0ccf7e4fdeef73a8026684a0e917"
+          test "$(git hash-object research/f3_campaign_finalize.py)" = "4324eb2a899df156441b9e4651329ef567857bf6"
+      - name: Obtain authenticated read-only run and artifact metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p evidence
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/45733982405" > evidence/source-run.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/45733982405/attempts/1/jobs?per_page=100" > evidence/source-jobs.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/45739677517" > evidence/final-run.json
+          for id in 15080054139 15077234210 15077309641 15077803671; do
+            gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$id" > "evidence/artifact-$id.json"
+          done
+      - uses: actions/download-artifact@v4
+        with:
+          name: f3-campaign-final
+          run-id: 45739677517
+          github-token: ${{ github.token }}
+          path: evidence/final
+      - uses: actions/download-artifact@v4
+        with:
+          name: f3-native-F301-receipt
+          run-id: 45733982405
+          github-token: ${{ github.token }}
+          path: evidence/F301
+      - uses: actions/download-artifact@v4
+        with:
+          name: f3-native-F302-receipt
+          run-id: 45733982405
+          github-token: ${{ github.token }}
+          path: evidence/F302
+      - uses: actions/download-artifact@v4
+        with:
+          name: f3-native-F303-receipt
+          run-id: 45733982405
+          github-token: ${{ github.token }}
+          path: evidence/F303
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --disable-pip-version-check --quiet jsonschema==4.23.0
+      - name: Validate native-shaped export against real pinned contracts
+        run: python research/f3_quant_handoff.py evidence qt-contract/research/research_os/contracts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: f3-quant-handoff
+          path: |
+            experiment-result.json
+            evidence-assessment.json
+          if-no-files-found: error

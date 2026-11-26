@@ -1,0 +1,69 @@
+name: F3 durable pre-inference reference archive
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/f3_reference_archive.yaml']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  archive:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: frozen-f3-reference-*
+          run-id: 45740139669
+          github-token: ${{ github.token }}
+          path: incoming
+      - name: Preserve exact comparator bytes before expiry
+        run: |
+          python3 - <<'PY'
+          import hashlib,json,math
+          from datetime import datetime
+          from pathlib import Path
+          root=Path("incoming")
+          def digest(raw):return hashlib.sha256(raw).hexdigest()
+          manifest_raw=(root/"frozen-f3-reference-manifest"/"f3-reference-manifest.json").read_bytes()
+          manifest=json.loads(manifest_raw)
+          pins={
+              "F304":("41e6928b01bffabeb52a86030264f35d916fd5999befb04393f7ee62efcd3414",15081225596),
+              "F310":("43a5e79e85ec931b909dd3a742bf0c4f779d909f7d8387f813edef47394a797c",15081250391),
+              "F306":("6b452282a1b10183cd3f7c2c7b9c456d1bb698a0b7c199828de1b7d4034974e7",15080234177),
+              "F307":("9430e1c444dfff53da6a20e734f274a20aeda193eccda6f18f3385968d62de4c",15079604620),
+              "F308":("963df03e2f55965eeb4eadcd95272772a6fe5af2e2078eef0e4d2c496ad3ad29",15080548036),
+              "F309":("c6c2d7969e3014c7a99e7782e865bd8a6cf9619cfb2f5c1e69f257fcb6fd79ea",15080757343)}
+          rows=manifest["references"]
+          assert len(rows)==6 and {r["case"] for r in rows}==set(pins)
+          records=[]
+          for r in rows:
+              c=r["case"];expected,artifact=pins[c]
+              raw=(root/("frozen-f3-reference-"+c)/"f3-reference.json").read_bytes()
+              assert digest(raw)==expected==r["reference_sha256"]
+              d=json.loads(raw)
+              assert d["case"]==c and d["qid"]==r["qid"] and d["snapshot_sha256"]==r["snapshot_sha256"] and d["definition_sha256"]==r["definition_sha256"]
+              assert digest(json.dumps(d["definition"],sort_keys=True,separators=(",",":"),ensure_ascii=True).encode())==d["definition_sha256"]
+              stamp=datetime.fromisoformat(d["frozen_at"])
+              assert stamp.utcoffset().total_seconds()==0 and stamp.date().isoformat()=="2026-11-26"
+              assert d["primary"]==r["primary"] and d["inference_calls"]==d["outcomes_scored"]==0 and d["promotion_authorized"] is False
+              assert set(d["reference"]).isdisjoint({"observations","rows","raw","prompt","response","api_key"})
+              for k in ("uniform","empirical"):
+                  p=d["reference"][k]
+                  assert len(p) in (2,3,202) and all(type(x) in (int,float) and math.isfinite(x) and 0<=x<=1 for x in p) and abs(sum(p)-1)<1e-10
+              records.append({"case":c,"source_artifact":artifact,"sha256":expected,"raw_utf8":raw.decode("utf-8")})
+          result={"schema":"f3-frozen-reference-archive-v1","source_run":45740139669,"source_manifest_artifact":15080946149,"source_manifest_sha256":digest(manifest_raw),"references":records,"scope":"frozen development comparators; no raw observations, outcomes or official scoring","inference_calls":0,"actual_outcomes_scored":0}
+          raw=json.dumps(result,sort_keys=True,separators=(",",":"),allow_nan=False).encode()
+          Path("reference-archive.json").write_bytes(raw)
+          # Chunk exact bytes as hex to avoid log line truncation. All contents are typed public-data references.
+          for i in range(0,len(raw),2000):
+              print("REFERENCE_ARCHIVE_CHUNK="+str(i//2000)+":"+raw[i:i+2000].hex())
+          print("REFERENCE_ARCHIVE_SHA256="+digest(raw))
+          print("REFERENCE_ARCHIVE_PASS="+str(len(records)))
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: durable-reference-archive
+          path: reference-archive.json
+          if-no-files-found: error

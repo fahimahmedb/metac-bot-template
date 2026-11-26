@@ -1,0 +1,41 @@
+name: G3 cross-domain historical label dependence
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/g3_historical_label_dependence.yaml']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  describe:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: cross-domain-nao
+          run-id: 45741785164
+          github-token: ${{ github.token }}
+          path: evidence/nao
+      - uses: actions/download-artifact@v4
+        with:
+          name: cross-domain-oil
+          run-id: 45741785164
+          github-token: ${{ github.token }}
+          path: evidence/oil
+      - uses: actions/download-artifact@v4
+        with:
+          name: cross-domain-river
+          run-id: 45741785164
+          github-token: ${{ github.token }}
+          path: evidence/river
+      - run: python3 research/g3_historical_label_dependence.py evidence
+      - uses: actions/upload-artifact@v4
+        with:
+          name: g3-historical-label-dependence
+          path: historical-label-dependence.json
+          if-no-files-found: error

@@ -1,0 +1,59 @@
+name: G3 six-country development definitions and dependence
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/g3_eurostat_country_development.yaml']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  define:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    strategy:
+      fail-fast: false
+      max-parallel: 6
+      matrix:
+        country: [DE, ES, IT, NL, PL, SE]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: eurostat-country-${{ matrix.country }}
+          run-id: 45741970010
+          github-token: ${{ github.token }}
+          path: evidence
+      - name: Recompute fixed definitions from pinned historical bytes
+        env:
+          COUNTRY: ${{ matrix.country }}
+        run: python3 research/g3_eurostat_country_development.py "$COUNTRY" evidence
+      - uses: actions/upload-artifact@v4
+        with:
+          name: country-definition-${{ matrix.country }}
+          path: country-definition.json
+          if-no-files-found: error
+  reconcile:
+    needs: define
+    if: always() && github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: country-definition-*
+          path: incoming
+      - name: Consolidate definitions and historical label dependence
+        run: python3 research/g3_eurostat_country_development.py consolidate incoming
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: country-definitions-final
+          path: country-definitions-final.json
+          if-no-files-found: error

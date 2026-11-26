@@ -1,0 +1,107 @@
+name: G3 cross-domain development definitions
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/g3_cross_domain_development.yaml', 'research/g3_cross_domain_development.py']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  define:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        candidate: [nao,oil,river]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: cross-domain-${{ matrix.candidate }}
+          run-id: 45741785164
+          github-token: ${{ github.token }}
+          path: evidence
+      - name: Reproduce predecessor false admissions on exact historical code
+        env:
+          CANDIDATE: ${{ matrix.candidate }}
+        run: |
+          git show 9c070ec9de2b17c7918b321640d75fae00a1d4f9:research/g3_cross_domain_development.py > /tmp/cross_old.py
+          PYTHONPATH=research python3 - <<'PY'
+          import sys,os,json
+          from pathlib import Path
+          sys.path.insert(0,"/tmp")
+          import cross_old as old
+          key=os.environ["CANDIDATE"]
+          raw=Path("evidence/cross-domain.json").read_bytes()
+          original=old.prepare(key,raw)
+          d=json.loads(raw)
+          d["rows"]=d["rows"][:-1]
+          ys=old.old.labels(key,d["rows"]);n=len(ys);y=sum(v for _,v in ys)
+          d["labels"]=ys;d["baseline"]={"n":n,"yes":y,"probability":(y+1)/(n+2)}
+          changed=old.prepare(key,old.canonical(d))
+          assert changed["definition_sha256"]==original["definition_sha256"] and changed["report_sha256"]!=original["report_sha256"]
+          print("PREDECESSOR_MUTATED_REPORT_SAME_DEFINITION_REPRODUCED")
+          if key=="nao":
+              b=b"2027 1 -99.9\n2027 1 1"
+              assert old.evaluate_capture(key,b,old.DATES[key]+"T12:00:00Z",old.source(key),old.sha(b))["value"]==1
+              print("PREDECESSOR_MISSING_DUPLICATE_REPRODUCED")
+          if key=="oil":
+              cells=["2027-Jan","01/01","410,000","01/08","400,000","01/15","399,000","01/22","","01/29",""]
+              b=("<h1>Different petroleum series</h1><table><tr>"+"".join("<td>"+x+"</td>" for x in cells)+"</tr></table>").encode()
+              assert old.evaluate_capture(key,b,old.DATES[key]+"T12:00:00Z",old.source(key),old.sha(b))["value"]==1
+              print("PREDECESSOR_WRONG_EIA_SERIES_REPRODUCED")
+          PY
+      - name: Reuse frozen source receipt and validate resolution arithmetic
+        env:
+          CANDIDATE: ${{ matrix.candidate }}
+        run: python3 research/g3_cross_domain_development.py "$CANDIDATE" evidence/cross-domain.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cross-domain-definition-${{ matrix.candidate }}
+          path: cross-domain-definition.json
+          if-no-files-found: error
+  reconcile:
+    needs: define
+    if: always() && github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: cross-domain-definition-*
+          path: incoming
+      - name: Consolidate development definitions without live admission
+        run: |
+          python3 - <<'PY'
+          import hashlib,json
+          from pathlib import Path
+          reports={};blocked=[]
+          pinned={"nao":"fe7ead1d56e2fe5e34f8d1fe5dbcb984a0f1b9b8f3787bc89686b98882054ab1","oil":"0aa48d6950f64d61e6db72c1dc6f19d85ca708c049c4cdd3893e78d694a4fd5f","river":"32317a94bc3776e69f23e59f64b70cabceef0406baa49523efce067a49c26b3c"}
+          for k in ("nao","oil","river"):
+              try:
+                  d=json.loads((Path("incoming")/("cross-domain-definition-"+k)/"cross-domain-definition.json").read_bytes())
+                  e=d["definition"]
+                  assert d["definition_sha256"]==hashlib.sha256(json.dumps(e,sort_keys=True,separators=(",",":"),allow_nan=False).encode()).hexdigest()
+                  assert d["definition_sha256"]==pinned[k], "predeclared definition changed"
+                  assert e["partition"]=="development_only" and not e["confirmatory_eligible"] and not e["inference_authorized"] and not e["capture_authorized"]
+                  assert d["inference_calls"]==d["actual_outcomes_accessed"]==0
+                  reports[k]=d
+              except (OSError,ValueError,KeyError,AssertionError):blocked.append(k)
+          r={"reports":reports,"blocked":blocked,"confirmatory_pairs":0,"inference_calls":0,"actual_outcomes_accessed":0,"status":"DEVELOPMENT_DEFINITIONS_READY" if not blocked else "PARTIAL_BLOCK"}
+          Path("cross-domain-definitions-final.json").write_text(json.dumps(r,sort_keys=True))
+          print("CROSS_DOMAIN_DEFINITIONS_FINAL="+json.dumps(r,sort_keys=True))
+          if blocked:raise SystemExit(1)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cross-domain-definitions-final
+          path: cross-domain-definitions-final.json
+          if-no-files-found: error

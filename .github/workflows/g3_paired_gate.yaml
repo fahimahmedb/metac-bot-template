@@ -1,0 +1,45 @@
+name: G3 paired coverage and registered deadline challenge
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/g3_paired_gate.yaml', 'research/g3_paired_gate.py', 'research/historical_calibration.py']
+permissions:
+  contents: read
+jobs:
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Reproduce late-resolution false admission on pinned predecessor
+        run: |
+          git show c0ca54274b37f7158b9ba675f873bcd8076d4da0:research/g3_paired_gate.py > /tmp/g3_old.py
+          PYTHONPATH=research python3 - <<'PY'
+          import sys
+          from datetime import timedelta
+          sys.path.insert(0,"/tmp")
+          import g3_old as old
+          m,f,y,t=old.synthetic()
+          y[0]["resolved_at"]=(old.dt(m["events"][0]["resolution_deadline"])+timedelta(days=1)).isoformat()
+          r=old.evaluate(m,f,y,t)
+          assert r["status"]=="PASS_STATISTICAL_ONLY"
+          print("PREDECESSOR_LATE_OUTCOME_FALSE_ADMISSION_REPRODUCED")
+          PY
+      - name: Reproduce disjoint missingness false admission on pinned predecessor
+        run: |
+          git show ed6654a11642f67bd03706926f5e76f24228eff3:research/g3_paired_gate.py > /tmp/g3_coverage_old.py
+          PYTHONPATH=research python3 - <<'PY'
+          import sys
+          sys.path.insert(0,"/tmp")
+          import g3_coverage_old as old
+          m,f,y,t=old.synthetic(120)
+          r=old.evaluate(m,f[6:],y[:-6],t)
+          assert r["status"]=="PASS_STATISTICAL_ONLY" and r["paired"]==108
+          assert r["coverage"]==r["resolution_coverage"]==.95
+          print("PREDECESSOR_DISJOINT_MISSINGNESS_FALSE_ADMISSION_REPRODUCED")
+          PY
+      - name: Verify corrected gate and complete existing regression suite
+        run: python3 research/g3_paired_gate.py --test

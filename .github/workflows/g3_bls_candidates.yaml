@@ -1,0 +1,30 @@
+name: G3 three direct BLS candidate baselines
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/g3_bls_candidates.yaml']
+permissions:
+  contents: read
+jobs:
+  baseline:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        candidate: [cpi,payroll,openings]
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Fetch one public series, freeze pre-event observations and baseline
+        env:
+          CANDIDATE: ${{ matrix.candidate }}
+        run: python3 research/g3_bls_candidates.py "$CANDIDATE"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: g3-bls-${{ matrix.candidate }}
+          path: bls-candidate.json
+          if-no-files-found: error

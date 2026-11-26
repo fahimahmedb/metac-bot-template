@@ -1,0 +1,17 @@
+name: F3 typed projection reusable-call proof
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/f3_pilot_projection_test.yaml']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  project:
+    uses: ./.github/workflows/f3_receipt_projection.yaml
+    with:
+      cohort: pilot
+      source_run: '45733982405'
+      source_head: '3459896cbd0d89f4274e527b5a5ced1fcff55993'
+      final_run: '45739677517'
+      final_head: '699ec1fed11dd2c141cb75833fc2a43db30ce4c7'

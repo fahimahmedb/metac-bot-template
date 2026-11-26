@@ -1,0 +1,23 @@
+name: G3 dataset-only candidate intake
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/g3_candidate_intake.yaml']
+permissions:
+  contents: read
+jobs:
+  intake:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Verify public snapshot and screen candidate identities without inference
+        run: python3 -I research/g3_candidate_intake.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: g3-dataset-candidate-intake
+          path: g3-intake.json
+          if-no-files-found: error

@@ -1,0 +1,20 @@
+# Retired after original 24 + D06 recovery 5 = 29 of 30 dispatches.
+# Immutable execution versions: 52127efefea9c6ca6e4f218f5df0039c4436e67b
+# and 6505f44d9144cf4c2e2453995527ce8570d79c95.
+# A new campaign requires its own explicit budget and materially justified change.
+name: No-Stream G2 diverse campaign closed
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/nostream_g2_diverse_real.yaml']
+permissions:
+  contents: read
+jobs:
+  closed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Fail-closed retirement receipt (no inference)
+        run: |
+          echo "CAMPAIGN_CLOSED original=24 recovery=5 total=29 cap=30 remaining=1"
+          echo "No model credentials or inference; no further G2 diverse dispatch admitted."

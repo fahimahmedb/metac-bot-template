@@ -2,7 +2,7 @@ name: G3 official Census bulk source transport qualification
 on:
   push:
     branches: [research/historical-blind-calibration]
-    paths: ['.github/workflows/g3_census_bulk_probe.yaml']
+    paths: ['.github/workflows/g3_census_bulk_probe.yaml', 'research/g3_census_bulk_probe.py']
 permissions:
   contents: read
 jobs:

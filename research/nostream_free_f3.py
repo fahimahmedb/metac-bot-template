@@ -20,8 +20,21 @@ CASE_SPECS={
  "F302":("D05","320b3e7a322aa5b4831778f959b4b260ae45ca0ff1fbfe0b0a0cbdf5d8061721",990032,"2027-02-28T23:59:59Z","observed monthly sunspot number"),
  "F303":("D03","c69d9bba0dd7f22761d0788188926368935ab79f0b993202ed7020cbe1f16804",990033,"2027-02-15T23:59:59Z","count of magnitude >=6 earthquakes per UTC month"),
 }
-DAY="2026-11-26"
+# Six additional distinct events across the same six public-source domains.
+# January cases use series not in F301-F303; February cases use new periods.
+# Technical robustness only; monthly serial dependence is not independence.
+DIVERSE_SPECS={
+ "F304":("D02","26bbb1fd280179316d7a358e9eb401a29498d8b7cfc860d4ccaac1f1aa86abc4",990034,"2027-02-28T23:59:59Z","seasonally adjusted final demand price index level (calculate monthly percentage change from successive months)"),
+ "F305":("D04","319a2d90575a77643283824c379ac386053aef350eaa5f64641dee5deaa935f5",990035,"2027-02-15T23:59:59Z","percent, daily 10-year constant maturity yield"),
+ "F306":("D06","1d8421df4bf505688db85cbbc645ec5a60c47240bcfb81c04a62eb6424f4248c",990036,"2027-02-15T23:59:59Z","USD per EUR, ECB daily reference rate"),
+ "F307":("D01","25abefef6ef13f8346a5669cc52e52981867f5e9a58215606daa167e67a74815",990037,"2027-03-31T23:59:59Z","percent, seasonally adjusted U-3"),
+ "F308":("D03","c69d9bba0dd7f22761d0788188926368935ab79f0b993202ed7020cbe1f16804",990038,"2027-03-15T23:59:59Z","count of magnitude >=6 earthquakes per UTC month"),
+ "F309":("D05","320b3e7a322aa5b4831778f959b4b260ae45ca0ff1fbfe0b0a0cbdf5d8061721",990039,"2027-03-31T23:59:59Z","observed monthly sunspot number"),
+}
+CASE_SPECS.update(DIVERSE_SPECS)
+FEB_CASES={"F307","F308","F309"}
 CASE=os.environ["NOSTREAM_F3_CASE"]
+DAY="2026-11-27" if CASE in DIVERSE_SPECS else "2026-11-26"
 OUT=Path("free-results")
 CACHE={}
 LOCK=threading.Lock()
@@ -41,11 +54,14 @@ def input_fixture():
     rows=doc["observations"]
     require(bool(rows) and rows==sorted(rows) and len({r[0] for r in rows})==len(rows) and all(r[0]<=ev.CUTOFF and type(r[1]) in (float,int) and math.isfinite(r[1]) for r in rows),"invalid evidence")
     case=dict(original,id=CASE,qid=qid,resolve=resolve)
-    case["question"]=original["question"].replace("December 2026","January 2027")
-    case["criteria"]=original["criteria"].replace("December 2026","January 2027").replace("2027-01-31 UTC","2027-02-28 UTC").replace("2027-01-15 UTC","2027-02-15 UTC").replace("[2026-12-01T00:00:00Z,2027-01-01T00:00:00Z)","[2027-01-01T00:00:00Z,2027-02-01T00:00:00Z)")
-    require(case["question"]!=original["question"] and "January 2027" in case["question"] and case["criteria"]!=original["criteria"],"not new event")
+    feb=CASE in FEB_CASES
+    month="February 2027" if feb else "January 2027"
+    start,end=("2027-02-01","2027-03-01") if feb else ("2027-01-01","2027-02-01")
+    case["question"]=original["question"].replace("December 2026",month)
+    case["criteria"]=original["criteria"].replace("December 2026",month).replace("2027-01-31 UTC","2027-03-31 UTC" if feb else "2027-02-28 UTC").replace("2027-01-15 UTC","2027-03-15 UTC" if feb else "2027-02-15 UTC").replace("[2026-12-01T00:00:00Z,2027-01-01T00:00:00Z)",f"[{start}T00:00:00Z,{end}T00:00:00Z)")
+    require(case["question"]!=original["question"] and month in case["question"] and case["criteria"]!=original["criteria"],"not new event")
     q=ev.build_question(case)
-    q=q.model_copy(update={"open_time":datetime(2026,11,26,tzinfo=timezone.utc)})
+    q=q.model_copy(update={"open_time":datetime.fromisoformat(DAY).replace(tzinfo=timezone.utc)})
     evidence="Public source "+case["source"]+"; observation units: "+units+"; retrieved "+doc["retrieved_at"]+". Observations (period, value): "+json.dumps(rows,separators=(",",":"))
     return case,q,evidence,digest
 
@@ -139,6 +155,7 @@ async def live():
     global CLOSED
     f.assert_no_platform_credentials()
     require(os.getenv("NOSTREAM_F3_LIVE_AUTHORIZED")=="true" and datetime.now(timezone.utc).date().isoformat()==DAY,"live date gate")
+    if CASE in DIVERSE_SPECS:require(os.getenv("NOSTREAM_F3_DIVERSE_AUTHORIZED")=="true","separate diverse campaign admission required")
     require(os.getenv("NOSTREAM_CEREBRAS_TRIAL_AUTHORIZED")=="true" and os.getenv("NOSTREAM_CEREBRAS_NO_RECHARGE_ATTESTED")=="true","trial attestation")
     require(all(os.getenv(k) for k in ("CEREBRAS_API_KEY","GEMINI_API_KEY","OPENROUTER_API_KEY")),"missing credential")
     case,q,evidence,digest=input_fixture();configure(case)

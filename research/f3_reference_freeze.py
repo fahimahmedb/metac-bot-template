@@ -29,4 +29,23 @@ def main():
     result={"case":case["id"],"qid":case["qid"],"definition":case,"definition_sha256":hashlib.sha256(definition).hexdigest(),"snapshot_sha256":snapshot,"frozen_at":now.isoformat(),"primary":primary,"reference":reference,"empirical_scope":"daily-level descriptive proxy, not monthly-end distribution" if case["id"]=="F310" else "historical frequency under existing source-specific transformation","scoring_scope":"local scores only; numeric bin/CDF convention needs qualification before scoring","inference_calls":0,"outcomes_scored":0,"promotion_authorized":False,"scientific_status":"development comparator only, not confirmatory G3"}
     Path("f3-reference.json").write_text(json.dumps(result,sort_keys=True))
     print("F3_REFERENCE_FROZEN="+json.dumps({k:v for k,v in result.items() if k not in ("definition","reference")}|{"historical_n":reference["historical_n"],"probabilities":reference[primary] if case["type"]!="numeric" else None},sort_keys=True))
-if __name__=="__main__":main()
+def verify(path,expected_sha):
+    raw=Path(path).read_bytes()
+    require(hashlib.sha256(raw).hexdigest()==expected_sha,"reference receipt identity")
+    d=json.loads(raw)
+    case,q,_,snapshot=f3.input_fixture()
+    definition=json.dumps(case,sort_keys=True,separators=(",",":"),ensure_ascii=True).encode()
+    require(d["case"]==case["id"] and d["qid"]==q.id_of_question and d["definition"]==case and d["definition_sha256"]==hashlib.sha256(definition).hexdigest() and d["snapshot_sha256"]==snapshot,"reference not bound to live fixture")
+    stamp=datetime.fromisoformat(d["frozen_at"])
+    require(stamp.tzinfo is not None and stamp.utcoffset().total_seconds()==0 and stamp.date().isoformat()=="2026-11-26","late or non-UTC reference")
+    require(d["primary"]==("uniform" if case["id"]=="F310" else "empirical") and d["inference_calls"]==d["outcomes_scored"]==0 and d["promotion_authorized"] is False,"reference policy changed")
+    # Recompute using the same exact archived inputs; never use future outcomes.
+    doc=json.loads(Path("diverse-input/snapshot.json").read_bytes())
+    require(d["reference"]==make_reference(doc["case"],doc["observations"]),"reference arithmetic mismatch")
+    print("F3_FROZEN_REFERENCE_VERIFIED="+json.dumps({"case":case["id"],"reference_sha256":expected_sha,"snapshot_sha256":snapshot,"inference_calls":0}))
+
+if __name__=="__main__":
+    import sys
+    if len(sys.argv)==1:main()
+    elif len(sys.argv)==4 and sys.argv[1]=="--verify":verify(sys.argv[2],sys.argv[3])
+    else:raise SystemExit("invalid arguments")

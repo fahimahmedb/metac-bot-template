@@ -1,8 +1,8 @@
-name: G3 registered resolution deadline challenge
+name: G3 paired coverage and registered deadline challenge
 on:
   push:
     branches: [research/historical-blind-calibration]
-    paths: ['.github/workflows/g3_paired_gate.yaml']
+    paths: ['.github/workflows/g3_paired_gate.yaml', 'research/g3_paired_gate.py', 'research/historical_calibration.py']
 permissions:
   contents: read
 jobs:
@@ -27,6 +27,19 @@ jobs:
           r=old.evaluate(m,f,y,t)
           assert r["status"]=="PASS_STATISTICAL_ONLY"
           print("PREDECESSOR_LATE_OUTCOME_FALSE_ADMISSION_REPRODUCED")
+          PY
+      - name: Reproduce disjoint missingness false admission on pinned predecessor
+        run: |
+          git show ed6654a11642f67bd03706926f5e76f24228eff3:research/g3_paired_gate.py > /tmp/g3_coverage_old.py
+          PYTHONPATH=research python3 - <<'PY'
+          import sys
+          sys.path.insert(0,"/tmp")
+          import g3_coverage_old as old
+          m,f,y,t=old.synthetic(120)
+          r=old.evaluate(m,f[6:],y[:-6],t)
+          assert r["status"]=="PASS_STATISTICAL_ONLY" and r["paired"]==108
+          assert r["coverage"]==r["resolution_coverage"]==.95
+          print("PREDECESSOR_DISJOINT_MISSINGNESS_FALSE_ADMISSION_REPRODUCED")
           PY
       - name: Verify corrected gate and complete existing regression suite
         run: python3 research/g3_paired_gate.py --test

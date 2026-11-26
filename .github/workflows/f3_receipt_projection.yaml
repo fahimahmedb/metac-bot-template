@@ -1,0 +1,68 @@
+name: F3 typed forecast projection
+on:
+  workflow_call:
+    inputs:
+      cohort:
+        type: string
+        required: true
+      source_run:
+        type: string
+        required: true
+      source_head:
+        type: string
+        required: true
+      final_run:
+        type: string
+        required: true
+      final_head:
+        type: string
+        required: true
+permissions:
+  contents: read
+  actions: read
+jobs:
+  project:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    env:
+      COHORT: ${{ inputs.cohort }}
+      SOURCE_RUN: ${{ inputs.source_run }}
+      SOURCE_HEAD: ${{ inputs.source_head }}
+      FINAL_RUN: ${{ inputs.final_run }}
+      FINAL_HEAD: ${{ inputs.final_head }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Read exact source and finalizer metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p evidence
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN" > evidence/source-run.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN/attempts/1/jobs?per_page=100" > evidence/source-jobs.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN/artifacts?per_page=100" > evidence/source-artifacts.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$FINAL_RUN" > evidence/final-run.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$FINAL_RUN/artifacts?per_page=100" > evidence/final-artifacts.json
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: ${{ inputs.cohort == 'diverse' && 'f3-diverse-*-receipt' || 'f3-native-*-receipt' }}
+          run-id: ${{ inputs.source_run }}
+          github-token: ${{ github.token }}
+          path: evidence/source
+      - uses: actions/download-artifact@v4
+        with:
+          name: f3-campaign-final
+          run-id: ${{ inputs.final_run }}
+          github-token: ${{ github.token }}
+          path: evidence/final
+      - name: Reconcile and project only verified typed forecasts
+        run: python3 research/f3_receipt_projection.py "$COHORT" "$SOURCE_RUN" "$SOURCE_HEAD" "$FINAL_RUN" "$FINAL_HEAD" evidence
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: f3-typed-forecast-projection
+          path: typed-forecast-projection.json
+          if-no-files-found: error

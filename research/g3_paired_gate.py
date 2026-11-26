@@ -17,6 +17,7 @@ MIN_GAIN=.01
 SEED=20261126
 DRAWS=10000
 SHADOW_POLICY="mean-and-median-logit-0.7-v1"
+REFERENCE_POLICY="laplace-floor-0.01-v1"
 def require(ok,msg):
     if not ok:raise ValueError(msg)
 def dt(s):
@@ -36,6 +37,18 @@ def shadow_probabilities(members):
     p=statistics.median(values)
     tempered=1/(1+math.exp(-.7*math.log(p/(1-p))))
     return {"mean":round(statistics.mean(values),3),"median_logit_0.7":round(tempered,3)}
+def reference_probability(event,freeze):
+    """Verify arithmetic and declared timing, NOT external receipt authenticity."""
+    b=event["reference"]
+    require(b["policy"]==REFERENCE_POLICY and b["definition_sha256"]==event["definition_sha256"],"reference identity")
+    require(dt(b["data_cutoff"])<=dt(b["frozen_at"])<=freeze,"reference frozen late or invalid cutoff")
+    digest(b["evidence_sha256"])
+    n,k=b["n"],b["yes"]
+    require(type(n) is int and type(k) is int and n>=12 and 0<=k<=n,"reference counts")
+    p=max(.01,min(.99,(k+1)/(n+2)))
+    require(abs(prob(b["probability"])-p)<=1e-12,"reference arithmetic")
+    return p
+
 def unique(rows,key):
     d={}
     for row in rows:
@@ -64,7 +77,10 @@ def evaluate(manifest,forecasts,outcomes,as_of):
     digest(manifest["engine_sha256"])
     shadow=manifest.get("shadow_policy")
     require(shadow is None or shadow==SHADOW_POLICY,"unknown shadow policy")
+    reference_policy=manifest.get("reference_policy")
+    require(reference_policy is None or reference_policy==REFERENCE_POLICY,"unknown reference policy")
     events=unique(manifest["events"],"id")
+    references={k:reference_probability(e,freeze) for k,e in events.items()} if reference_policy else {}
     # A family can occur only once in confirmatory cohort. Correlated variants
     # of the same underlying event must not enter under different IDs.
     unique(manifest["events"],"family")
@@ -96,7 +112,7 @@ def evaluate(manifest,forecasts,outcomes,as_of):
     due=[k for k,e in events.items() if dt(e["forecast_deadline"])<=cutoff]
     coverage=len(set(due)&set(valid))/len(due) if due else 0
     pairs=sorted(set(valid)&set(ys))
-    rows=[];preds=defaultdict(list);blocks=defaultdict(list);shadow_preds=defaultdict(list);shadow_blocks=defaultdict(lambda:defaultdict(list))
+    rows=[];preds=defaultdict(list);blocks=defaultdict(list);shadow_preds=defaultdict(list);shadow_blocks=defaultdict(lambda:defaultdict(list));reference_blocks=defaultdict(list)
     for k in pairs:
         issued,p,members=valid[k];y=ys[k]["value"];resolved=dt(ys[k]["resolved_at"])
         rows.append(Row(k,issued.date(),resolved.date(),p,y))
@@ -105,6 +121,10 @@ def evaluate(manifest,forecasts,outcomes,as_of):
         for role,v in members.items():preds[role].append(v)
         week=issued.isocalendar()
         blocks[(week.year,week.week)].append((members[PRIMARY]-y)**2-(p-y)**2)
+        if reference_policy:
+            q=references[k]
+            preds["frozen_reference"].append(q)
+            reference_blocks[(week.year,week.week)].append((q-y)**2-(p-y)**2)
         if shadow:
             for name,q in shadow_probabilities(members).items():
                 shadow_preds[name].append(q)
@@ -125,12 +145,18 @@ def evaluate(manifest,forecasts,outcomes,as_of):
     enough=final_analysis and len(pairs)>=MIN_N and len(blocks)>=MIN_BLOCKS and coverage>=MIN_COVERAGE and resolution_coverage>=MIN_COVERAGE and paired_coverage>=MIN_COVERAGE
     passed=enough and interval is not None and gain>=MIN_GAIN and interval[0]>0 and metrics["ensemble"]["log_loss"]<=metrics[PRIMARY]["log_loss"]
     status="PASS_STATISTICAL_ONLY" if passed else "FAIL_THRESHOLD" if enough else "UNKNOWN_INSUFFICIENT_EVIDENCE"
+    reference_result={"status":"NOT_REGISTERED"}
+    if reference_policy:
+        ref_gain=metrics["frozen_reference"]["brier"]-metrics["ensemble"]["brier"] if rows else None
+        ref_ci=block_interval(reference_blocks)
+        ref_pass=enough and ref_ci is not None and ref_gain>=MIN_GAIN and ref_ci[0]>0 and metrics["ensemble"]["log_loss"]<=metrics["frozen_reference"]["log_loss"]
+        reference_result={"status":"PASS_STATISTICAL_ONLY" if ref_pass else "FAIL_THRESHOLD" if enough else "UNKNOWN_INSUFFICIENT_EVIDENCE","gain":ref_gain,"grouped_ci95":ref_ci,"paired":len(pairs),"provenance_independently_verified":False,"promotion_authorized":False}
     shadow_results={}
     if shadow and rows:
         for name,ps in shadow_preds.items():
             m=score(rows,ps)
             shadow_results[name]={"metrics":m,"gain_vs_median":metrics["ensemble"]["brier"]-m["brier"],"grouped_ci95":block_interval(shadow_blocks[name]),"status":"EXPLORATORY_ONLY","requires_new_independent_confirmation":True}
-    return {"status":status,"registered":len(events),"due":len(due),"resolved":len(ys),"paired":len(pairs),"paired_coverage":paired_coverage,"coverage":coverage,"resolution_coverage":resolution_coverage,"final_analysis":final_analysis,"forecast_weeks":len(blocks),"metrics":metrics,"paired_brier_gain":gain,"full_cohort_gain_sensitivity_bounds":cohort_gain_bounds,"grouped_ci95":interval,"primary":PRIMARY,"shadow_policy":shadow,"shadow_results":shadow_results,"inference_calls":0,"provenance_independently_verified":False,"official_futureeval_score":False,"promotion_authorized":False}
+    return {"status":status,"registered":len(events),"due":len(due),"resolved":len(ys),"paired":len(pairs),"paired_coverage":paired_coverage,"coverage":coverage,"resolution_coverage":resolution_coverage,"final_analysis":final_analysis,"forecast_weeks":len(blocks),"metrics":metrics,"paired_brier_gain":gain,"full_cohort_gain_sensitivity_bounds":cohort_gain_bounds,"grouped_ci95":interval,"primary":PRIMARY,"reference_policy":reference_policy,"reference_result":reference_result,"shadow_policy":shadow,"shadow_results":shadow_results,"inference_calls":0,"provenance_independently_verified":False,"official_futureeval_score":False,"promotion_authorized":False}
 def synthetic(n=100):
     from datetime import timedelta,timezone
     origin=datetime(2027,1,1,tzinfo=timezone.utc)
@@ -192,7 +218,25 @@ def tests():
     try:evaluate(sm,f,y,t)
     except ValueError:pass
     else:raise AssertionError("unregistered shadow policy admitted")
-    print("G3_PAIRED_GATE_TESTS_PASS=22 synthetic_only=true real_resolved_events=0")
+    # Fixed comparator, same sample and identical primary verdict. Counts are
+    # synthetic; the favorable/adversarial fixtures prove logic, not skill.
+    rm=copy.deepcopy(m);rm["reference_policy"]=REFERENCE_POLICY
+    for e in rm["events"]:
+        e["reference"]={"policy":REFERENCE_POLICY,"definition_sha256":e["definition_sha256"],"data_cutoff":rm["frozen_at"],"frozen_at":rm["frozen_at"],"evidence_sha256":"a"*64,"n":18,"yes":9,"probability":.5}
+    rr=evaluate(rm,f,y,t)
+    require(rr["status"]==r["status"] and rr["reference_result"]["status"]=="PASS_STATISTICAL_ONLY" and rr["reference_result"]["paired"]==100,"reference paired pass")
+    require(rr["metrics"]["frozen_reference"]==rr["metrics"]["half"],"same paired sample")
+    for e,label in zip(rm["events"],y,strict=True):
+        e["reference"].update(yes=17 if label["value"] else 1,probability=.9 if label["value"] else .1)
+    losing=evaluate(rm,f,y,t)
+    require(losing["status"]=="PASS_STATISTICAL_ONLY" and losing["reference_result"]["status"]=="FAIL_THRESHOLD" and losing["reference_result"]["gain"]<0,"Nemotron win is not baseline win")
+    require(evaluate(rm,f[:90],y,t)["reference_result"]["status"]=="UNKNOWN_INSUFFICIENT_EVIDENCE","reference coverage")
+    for field,val in (("frozen_at",f[0]["issued_at"]),("probability",.7),("n",True),("definition_sha256","b"*64),("evidence_sha256","bad"),("policy","other")):
+        bad=copy.deepcopy(rm);bad["events"][0]["reference"][field]=val
+        try:evaluate(bad,f,y,t)
+        except ValueError:pass
+        else:raise AssertionError("invalid reference accepted: "+field)
+    print("G3_PAIRED_GATE_TESTS_PASS=32 synthetic_only=true real_resolved_events=0")
 if __name__=="__main__":
     if sys.argv[1:]==["--test"]:tests()
     elif len(sys.argv)==5:

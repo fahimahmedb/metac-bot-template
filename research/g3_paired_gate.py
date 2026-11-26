@@ -49,6 +49,26 @@ def reference_probability(event,freeze):
     require(abs(prob(b["probability"])-p)<=1e-12,"reference arithmetic")
     return p
 
+def reliability(rows,probabilities):
+    """Five fixed bins on exactly the scored pairs; descriptive, not a gate."""
+    require(len(rows)==len(probabilities) and bool(rows),"calibration alignment")
+    buckets=[[] for _ in range(5)]
+    for r,p in zip(rows,probabilities,strict=True):
+        p=prob(p)
+        idx=next((i for i in range(4) if p<(i+1)/5),4)
+        buckets[idx].append((p,r.y))
+    bins=[]
+    for i,group in enumerate(buckets):
+        n=len(group)
+        bins.append({"low":i/5,"high":(i+1)/5,"n":n,
+                     "mean_probability":statistics.mean(p for p,y in group) if n else None,
+                     "observed_frequency":statistics.mean(y for p,y in group) if n else None})
+    n=len(rows)
+    ece=sum(b["n"]*abs(b["mean_probability"]-b["observed_frequency"]) for b in bins if b["n"])/n
+    return {"n":n,"bins":bins,"ece_descriptive":ece,
+            "mean_probability_minus_frequency":statistics.mean(probabilities)-statistics.mean(r.y for r in rows),
+            "status":"DESCRIPTIVE_ONLY","independence_assumed":False,"promotion_authorized":False}
+
 def unique(rows,key):
     d={}
     for row in rows:
@@ -130,6 +150,7 @@ def evaluate(manifest,forecasts,outcomes,as_of):
                 shadow_preds[name].append(q)
                 shadow_blocks[name][(week.year,week.week)].append((p-y)**2-(q-y)**2)
     metrics={k:score(rows,v) for k,v in preds.items()} if rows else {}
+    calibration={k:reliability(rows,v) for k,v in preds.items()} if rows else {}
     interval=block_interval(blocks)
     gain=metrics[PRIMARY]["brier"]-metrics["ensemble"]["brier"] if metrics else None
     # The pre-existing clip in score is inactive for all admitted probabilities.
@@ -156,7 +177,7 @@ def evaluate(manifest,forecasts,outcomes,as_of):
         for name,ps in shadow_preds.items():
             m=score(rows,ps)
             shadow_results[name]={"metrics":m,"gain_vs_median":metrics["ensemble"]["brier"]-m["brier"],"grouped_ci95":block_interval(shadow_blocks[name]),"status":"EXPLORATORY_ONLY","requires_new_independent_confirmation":True}
-    return {"status":status,"registered":len(events),"due":len(due),"resolved":len(ys),"paired":len(pairs),"paired_coverage":paired_coverage,"coverage":coverage,"resolution_coverage":resolution_coverage,"final_analysis":final_analysis,"forecast_weeks":len(blocks),"metrics":metrics,"paired_brier_gain":gain,"full_cohort_gain_sensitivity_bounds":cohort_gain_bounds,"grouped_ci95":interval,"primary":PRIMARY,"reference_policy":reference_policy,"reference_result":reference_result,"shadow_policy":shadow,"shadow_results":shadow_results,"inference_calls":0,"provenance_independently_verified":False,"official_futureeval_score":False,"promotion_authorized":False}
+    return {"status":status,"registered":len(events),"due":len(due),"resolved":len(ys),"paired":len(pairs),"paired_coverage":paired_coverage,"coverage":coverage,"resolution_coverage":resolution_coverage,"final_analysis":final_analysis,"forecast_weeks":len(blocks),"metrics":metrics,"calibration":calibration,"paired_brier_gain":gain,"full_cohort_gain_sensitivity_bounds":cohort_gain_bounds,"grouped_ci95":interval,"primary":PRIMARY,"reference_policy":reference_policy,"reference_result":reference_result,"shadow_policy":shadow,"shadow_results":shadow_results,"inference_calls":0,"provenance_independently_verified":False,"official_futureeval_score":False,"promotion_authorized":False}
 def synthetic(n=100):
     from datetime import timedelta,timezone
     origin=datetime(2027,1,1,tzinfo=timezone.utc)
@@ -236,7 +257,15 @@ def tests():
         try:evaluate(bad,f,y,t)
         except ValueError:pass
         else:raise AssertionError("invalid reference accepted: "+field)
-    print("G3_PAIRED_GATE_TESTS_PASS=32 synthetic_only=true real_resolved_events=0")
+    # Five equal-width bins, fixed before observations. Empty bins stay null.
+    cal_rows=[Row(str(i),t.date(),t.date(),p,y) for i,(p,y) in enumerate(((.1,0),(.2,1),(.4,0),(.6,1),(.8,1),(.99,1)))]
+    c=reliability(cal_rows,[.1,.2,.4,.6,.8,.99])
+    require([b["n"] for b in c["bins"]]==[1,1,1,1,2],"calibration bin boundaries")
+    require(abs(c["ece_descriptive"]-(.1+.8+.4+.4+.105*2)/6)<1e-12,"calibration arithmetic")
+    c0=reliability(cal_rows,[.5]*6)
+    require(c0["bins"][0]["mean_probability"] is None and c0["bins"][2]["n"]==6,"calibration empty bins")
+    require(rr["calibration"]["frozen_reference"]==rr["calibration"]["half"] and rr["calibration"]["ensemble"]["n"]==rr["paired"] and rr["status"]==r["status"],"calibration same paired sample")
+    print("G3_PAIRED_GATE_TESTS_PASS=36 synthetic_only=true real_resolved_events=0")
 if __name__=="__main__":
     if sys.argv[1:]==["--test"]:tests()
     elif len(sys.argv)==5:

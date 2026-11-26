@@ -67,3 +67,5 @@ jobs:
           name: eurostat-repair-final
           path: eurostat-final.json
           if-no-files-found: error
+
+# Second targeted repair: actual age-axis size=0; documented age=TOTAL. Preserve earlier runs.

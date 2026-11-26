@@ -12,8 +12,19 @@ concurrency:
   group: nostream-free-f0-once
   cancel-in-progress: false
 jobs:
+  admission:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Fail closed on duplicate workflow or retry and wrong UTC window
+        run: |
+          test "$GITHUB_RUN_NUMBER" = 1
+          test "$GITHUB_RUN_ATTEMPT" = 1
+          test "$(date -u +%F)" = "2026-11-27"
+          echo "F3_ONCE_GUARD_PASS run=$GITHUB_RUN_ID number=$GITHUB_RUN_NUMBER attempt=$GITHUB_RUN_ATTEMPT"
   real:
-    if: github.run_attempt == 1
+    needs: admission
+    if: github.run_number == 1 && github.run_attempt == 1
     runs-on: ubuntu-latest
     timeout-minutes: 18
     strategy:
@@ -137,8 +148,8 @@ jobs:
           path: upstream/free-results/
           if-no-files-found: warn
   finalize:
-    needs: real
-    if: always() && github.run_attempt == 1
+    needs: [admission, real]
+    if: always() && needs.admission.result == 'success' && github.run_number == 1 && github.run_attempt == 1
     uses: ./.github/workflows/f3_campaign_finalize.yaml
     with:
       cohort: diverse

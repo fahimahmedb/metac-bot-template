@@ -1,0 +1,88 @@
+name: G3 Census historical hosted custody qualification
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/g3_census_capture_custody.yaml']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  custody:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - program: M3ADV
+            job_id: 139653086668
+            artifact_id: 15082395616
+          - program: BFS
+            job_id: 139653086675
+            artifact_id: 15081793061
+          - program: FTD
+            job_id: 139653086604
+            artifact_id: 15081359958
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Verify source producer identities
+        run: |
+          test "$(git rev-parse 7c743ee2931bf70bf653ac67a2554112550e3ca1:research/g3_census_bulk_probe.py)" = 113a77a16eef554e095e014c97c2f2a4017063c2
+          test "$(git rev-parse 7c743ee2931bf70bf653ac67a2554112550e3ca1:research/g2_diverse_evidence.py)" = 07a594a0bbf28679e5345fb57cc2ed459b6a798a
+          test "$(git hash-object research/g3_census_bulk_probe.py)" = 113a77a16eef554e095e014c97c2f2a4017063c2
+      - name: Read actual archived GitHub identities, bytes and job log
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_JOB: ${{ matrix.job_id }}
+          SOURCE_ARTIFACT: ${{ matrix.artifact_id }}
+        run: |
+          mkdir evidence
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/45743246873" > evidence/run.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/45743246873/attempts/1/jobs?per_page=100" > evidence/jobs.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$SOURCE_ARTIFACT" > evidence/artifact.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$SOURCE_ARTIFACT/zip" > evidence/artifact.zip
+          gh api "repos/$GITHUB_REPOSITORY/actions/jobs/$SOURCE_JOB/logs" > evidence/job.log
+      - run: python3 research/g3_census_capture_custody.py "${{ matrix.program }}" evidence
+      - uses: actions/upload-artifact@v4
+        with:
+          name: census-custody-${{ matrix.program }}
+          path: census-custody.json
+          if-no-files-found: error
+  reconcile:
+    needs: custody
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: census-custody-*
+          path: incoming
+      - run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          reports={};blocked=[]
+          for k in ("M3ADV","BFS","FTD"):
+              try:
+                  r=json.loads((Path("incoming")/("census-custody-"+k)/"census-custody.json").read_bytes())
+                  assert r["program"]==k and r["status"]=="HISTORICAL_HOSTED_CUSTODY_PASS" and r["adversarial_checks"]==8 and r["hosted_artifact_custody_verified"]
+                  assert not any(r[x] for x in ("producer_response_independently_authenticated","first_success_verified","point_in_time_vintage_verified","capture_authorized"))
+                  assert r["inference_calls"]==r["actual_outcomes_accessed"]==0
+                  reports[k]=r
+              except (OSError,ValueError,KeyError,TypeError,AssertionError):blocked.append(k)
+          d={"status":"HISTORICAL_HOSTED_CUSTODY_PASS" if not blocked else "PARTIAL_BLOCK","reports":reports,"blocked":blocked,"first_success_verified":False,"capture_authorized":False,"inference_calls":0,"actual_outcomes_accessed":0}
+          Path("census-custody-final.json").write_text(json.dumps(d,sort_keys=True))
+          print("CENSUS_CUSTODY_FINAL="+json.dumps(d,sort_keys=True))
+          if blocked:raise SystemExit(1)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: census-custody-final
+          path: census-custody-final.json
+          if-no-files-found: error

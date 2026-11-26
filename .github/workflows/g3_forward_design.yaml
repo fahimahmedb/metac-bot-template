@@ -1,0 +1,102 @@
+name: G3 forward design and economic decision seam (offline)
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/g3_forward_design.yaml', 'research/g3_portfolio_readiness.py', 'research/g3_decision_value_design.py']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  cohort:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: bls-definitions-final
+          run-id: 45740108112
+          github-token: ${{ github.token }}
+          path: evidence/bls
+      - uses: actions/download-artifact@v4
+        with:
+          name: eurostat-definitions-final
+          run-id: 45741686088
+          github-token: ${{ github.token }}
+          path: evidence/france
+      - uses: actions/download-artifact@v4
+        with:
+          name: country-definitions-final
+          run-id: 45742397543
+          github-token: ${{ github.token }}
+          path: evidence/europe
+      - uses: actions/download-artifact@v4
+        with:
+          name: cross-domain-definitions-final
+          run-id: 45742547902
+          github-token: ${{ github.token }}
+          path: evidence/cross_domain
+      - uses: actions/download-artifact@v4
+        with:
+          name: g3-bridge-final
+          run-id: 45742441153
+          github-token: ${{ github.token }}
+          path: evidence/native_mock
+      - run: python3 research/g3_portfolio_readiness.py evidence
+      - uses: actions/upload-artifact@v4
+        with:
+          name: g3-portfolio-readiness
+          path: g3-portfolio-readiness.json
+          if-no-files-found: error
+  decision:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - run: python3 research/g3_decision_value_design.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: g3-decision-design
+          path: decision-design-report.json
+          if-no-files-found: error
+  reconcile:
+    needs: [cohort,decision]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          pattern: g3-*
+          path: evidence
+      - run: |
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          reports={};blocked=[]
+          for key,filename in (("g3-portfolio-readiness","g3-portfolio-readiness.json"),("g3-decision-design","decision-design-report.json")):
+              try:
+                  r=json.loads((Path("evidence")/key/filename).read_bytes())
+                  if key=="g3-portfolio-readiness":
+                      assert r["status"]=="BLOCK_CONFIRMATORY_DESIGN" and r["confirmatory_pairs"]==r["inference_calls"]==r["actual_outcomes_accessed"]==0 and not r["promotion_authorized"]
+                  else:
+                      assert r["real_economic_trials"]==0 and all(not r[k]["promotion_authorized"] and not r[k]["actual_market_data_used"] for k in ("same_decision","negative_net","positive_net"))
+                  reports[key]=r
+              except (OSError,KeyError,TypeError,ValueError,AssertionError):
+                  blocked.append(key)
+          result={"status":"FORWARD_DESIGN_QUALIFIED" if not blocked else "PARTIAL_BLOCK","blocked":blocked,"reports":reports,"live_admission":False,"economic_experiment_authorized":False,"inference_calls":0}
+          Path("g3-forward-design-final.json").write_text(json.dumps(result,sort_keys=True))
+          print("G3_FORWARD_DESIGN_FINAL="+json.dumps({"status":result["status"],"blocked":blocked,"report_keys":list(reports),"inference_calls":0,"economic_experiment_authorized":False},sort_keys=True))
+          if blocked:raise SystemExit(1)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: g3-forward-design-final
+          path: g3-forward-design-final.json
+          if-no-files-found: error

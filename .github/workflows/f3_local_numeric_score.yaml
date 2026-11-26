@@ -1,0 +1,37 @@
+name: F3 local numeric score convention
+on:
+  push:
+    branches: [research/historical-blind-calibration]
+    paths: ['.github/workflows/f3_local_numeric_score.yaml']
+permissions:
+  contents: read
+  actions: read
+jobs:
+  score_fixture:
+    if: github.run_attempt == 1
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        include:
+          - case: F308
+            sha: 963df03e2f55965eeb4eadcd95272772a6fe5af2e2078eef0e4d2c496ad3ad29
+          - case: F310
+            sha: 43a5e79e85ec931b909dd3a742bf0c4f779d909f7d8387f813edef47394a797c
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: frozen-f3-reference-${{ matrix.case }}
+          run-id: 45740139669
+          github-token: ${{ github.token }}
+          path: evidence
+      - name: Score edge cases on synthetic outcomes only
+        env:
+          CASE: ${{ matrix.case }}
+          REF_SHA: ${{ matrix.sha }}
+        run: python3 research/f3_local_numeric_score.py "$CASE" evidence/f3-reference.json "$REF_SHA"

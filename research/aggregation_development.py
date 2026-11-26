@@ -8,7 +8,9 @@ import hashlib,json,math,random,statistics,sys
 from collections import defaultdict,Counter
 from datetime import date
 from pathlib import Path
+import second_holdout
 from second_holdout import read_archive,partition,pooled
+from unittest.mock import patch
 from historical_calibration import Row,score,transform,paired_bootstrap
 
 POLICIES=("median","mean","logit","logit_0.7","logit_1.3","median_0.7","median_1.3")
@@ -25,8 +27,12 @@ def pred(values,method):
     scale=1 if method=="logit" else float(method.split("_")[1])
     return 1/(1+math.exp(-scale*z))
 
-def prepare(archive,out):
-    events,preds,counts=read_archive(archive)
+def prepare(archive,out,expected_sha):
+    require(len(expected_sha)==64 and all(c in "0123456789abcdef" for c in expected_sha),"archive identity")
+    # The official mutable archive has changed. Reuse reader with a scoped
+    # separately captured digest, never modify old experiment constants.
+    with patch.object(second_holdout,"ARCHIVE_SHA",expected_sha):
+        events,preds,counts=read_archive(archive)
     selected=[]
     for e in sorted(events.values(),key=lambda e:(e.issued,e.key)):
         # The prior test partition remains unused here; no repeated test claim.
@@ -35,9 +41,9 @@ def prepare(archive,out):
         if len(providers)<3:continue
         selected.append({"id":h(e.key),"source":e.key.split(":",1)[0],"issued":str(e.issued),"resolved":str(e.resolved),"partition":partition(e),"y":e.y,"pools":providers})
     require(len({r["id"] for r in selected})==len(selected),"duplicate event")
-    result={"license":"Forecasting Research Institute ForecastBench CC BY-SA 4.0; https://www.forecastbench.org/datasets/","scope":"previously consumed development archive only; no real F3 predictions","counts":counts,"rows":selected}
+    result={"archive_sha256":expected_sha,"archive_original_sha256":second_holdout.ARCHIVE_SHA,"license":"Forecasting Research Institute ForecastBench CC BY-SA 4.0; https://www.forecastbench.org/datasets/","scope":"previously consumed development archive only; no real F3 predictions","counts":counts,"rows":selected}
     out.write_text(json.dumps(result,sort_keys=True))
-    print("AGG_PREP="+json.dumps({"n":len(selected),"partitions":dict(Counter(r["partition"] for r in selected)),"rounds":len(set(r["issued"] for r in selected)),"sha256":hashlib.sha256(out.read_bytes()).hexdigest(),"inference_calls":0}))
+    print("AGG_PREP="+json.dumps({"archive_sha256":expected_sha,"n":len(selected),"partitions":dict(Counter(r["partition"] for r in selected)),"rounds":len(set(r["issued"] for r in selected)),"sha256":hashlib.sha256(out.read_bytes()).hexdigest(),"inference_calls":0}))
 
 def choose_values(row,mode):
     pool=row["pools"]
@@ -49,6 +55,7 @@ def choose_values(row,mode):
 
 def evaluate(data,mode):
     require(mode in ("three","all"),"unknown mode")
+    archive_sha=data["archive_sha256"]
     data=data["rows"]
     require(len({r["id"] for r in data})==len(data),"duplicate event")
     def subset(rows):
@@ -71,7 +78,7 @@ def evaluate(data,mode):
         later=b["metrics"]["median"]["brier"]-b["metrics"][chosen]["brier"]
         decision="CANDIDATE_FOR_PROSPECTIVE_TEST" if chosen!="median" and later>=.002 else "KEEP_MEDIAN_REFERENCE"
     else:chosen=None;later=None;decision="BLOCK_INSUFFICIENT_DEVELOPMENT_COVERAGE"
-    return {"mode":mode,"scope":"exploratory, overlapping historical development rows, not independent confirmation","reports":reports,"chosen_on_earlier_development":chosen,"later_development_gain":later,"decision":decision,"inference_calls":0,"f3_skill":"UNKNOWN","promotion_authorized":False}
+    return {"mode":mode,"archive_sha256":archive_sha,"scope":"exploratory, overlapping historical development rows, not independent confirmation","reports":reports,"chosen_on_earlier_development":chosen,"later_development_gain":later,"decision":decision,"inference_calls":0,"f3_skill":"UNKNOWN","promotion_authorized":False}
 
 def tests():
     require(pred([.1,.2,.9],"median")==.2,"median")
@@ -87,7 +94,7 @@ def tests():
 
 if __name__=="__main__":
     tests()
-    if sys.argv[1]=="prepare":prepare(Path(sys.argv[2]),Path(sys.argv[3]))
+    if sys.argv[1]=="prepare":prepare(Path(sys.argv[2]),Path(sys.argv[3]),sys.argv[4])
     elif sys.argv[1]=="evaluate":
         r=evaluate(json.loads(Path(sys.argv[2]).read_text()),sys.argv[3])
         Path("aggregation-report.json").write_text(json.dumps(r,sort_keys=True))

@@ -99,13 +99,16 @@ def audit(case,cohort,run_id,head,run,jobs,folder):
     require(job["head_sha"]==head and job["status"]=="completed","job not terminal")
     result={"case":case,"cohort":cohort,"source_run":run_id,"source_head":head,"source_job":job["id"],"job_conclusion":job["conclusion"],"status":"BLOCK","dispatches_lower":0,"dispatches_upper":4,"reason":"terminal failure or missing receipt","inference_calls":0}
     try:
+        router=read(folder/"ledger.json");direct=read(folder/"direct-ledger.json")
+        require(isinstance(router,list) and isinstance(direct,list) and all(isinstance(r.get("dispatches"),list) for r in direct),"ledger shape")
+        count=len(router)+sum(len(r["dispatches"]) for r in direct)
+        # Preserve observed ledger count even if the summary is missing or cap breached.
+        result["dispatches_lower"]=count
+        result["dispatches_upper"]=max(4,count)
+        require(count<=4,"observed dispatch budget exceeded")
         raw=(folder/"f3-native-summary.json").read_bytes()
         d=json.loads(raw)
         result["summary_sha256"]=digest(raw)
-        router=read(folder/"ledger.json");direct=read(folder/"direct-ledger.json")
-        count=len(router)+sum(len(r["dispatches"]) for r in direct)
-        require(count<=4,"observed dispatch budget exceeded")
-        result["dispatches_lower"]=count
         require(job["conclusion"]=="success","source job not successful")
         result["aggregation_max_abs_error"]=check_summary(case,d,router,direct)
         result.update(status="PASS",reason="terminal source job and receipt reconciled; fixture-specific arithmetic",dispatches_upper=count)
@@ -120,14 +123,23 @@ def consolidate(cohort,run_id,head,folder):
         try:
             r=read(folder/case/"audit.json")
             require(r["case"]==case and r["cohort"]==cohort and r["source_run"]==run_id and r["source_head"]==head,"audit identity")
-            require(r["status"] in ("PASS","BLOCK","STOP") and type(r["dispatches_lower"]) is int and type(r["dispatches_upper"]) is int and 0<=r["dispatches_lower"]<=r["dispatches_upper"]<=4,"audit budget")
+            require(r["status"] in ("PASS","BLOCK","STOP") and type(r["dispatches_lower"]) is int and type(r["dispatches_upper"]) is int and 0<=r["dispatches_lower"]<=r["dispatches_upper"],"audit budget")
+            if r["status"]=="STOP":
+                require(r["dispatches_lower"]>4,"unsubstantiated excess")
+            else:
+                require(r["dispatches_upper"]<=4,"audit budget")
+            if r["status"]=="PASS":
+                require(3<=r["dispatches_lower"]==r["dispatches_upper"]<=4,"PASS count")
+                require(type(r.get("source_job")) is int and r["source_job"]>0 and r.get("job_conclusion")=="success" and sha(r.get("summary_sha256")) and r.get("inference_calls")==0,"PASS receipt identity")
+                err=r.get("aggregation_max_abs_error")
+                require(type(err) in (int,float) and math.isfinite(err) and 0<=err<=(1e-3 if SPECS[case][0]=="binary" else 1e-6 if SPECS[case][0]=="multiple_choice" else 1e-9),"PASS aggregation proof")
         except (ValueError,KeyError,TypeError,OSError):
             r={"case":case,"status":"BLOCK","dispatches_lower":0,"dispatches_upper":4,"reason":"audit missing or invalid"}
         results.append(r)
     valid=[r["case"] for r in results if r["status"]=="PASS"]
     stop=any(r["status"]=="STOP" for r in results)
     ok=len(valid)==len(results)
-    return {"cohort":cohort,"source_run":run_id,"source_head":head,"status":"STOP" if stop else "PASS_TECHNICAL_ONLY" if ok else "BLOCK","passed":valid,"unresolved":[r["case"] for r in results if r["status"]!="PASS"],"dispatches_lower":sum(r["dispatches_lower"] for r in results),"dispatches_upper":sum(r["dispatches_upper"] for r in results),"cap":4*len(results),"cases":results,"next_action":"REVIEW_G3_ADMISSION" if ok and cohort=="diverse" else "DIVERSE_FRESH_WINDOW" if ok else "INSPECT_UNRESOLVED_ONLY_NO_AUTO_RETRY","automatic_live_admission":False,"predictive_skill":"UNKNOWN","direct_billing":"UNVERIFIED","published":0,"inference_calls":0}
+    return {"cohort":cohort,"source_run":run_id,"source_head":head,"status":"STOP" if stop else "PASS_TECHNICAL_ONLY" if ok else "BLOCK","passed":valid,"unresolved":[r["case"] for r in results if r["status"]!="PASS"],"dispatches_lower":sum(r["dispatches_lower"] for r in results),"dispatches_upper":sum(r["dispatches_upper"] for r in results),"cap":4*len(results),"cases":results,"dispatch_bounds_scope":"observed ledger lower; unresolved upper conditional on cap adherence, not account-wide guarantee","next_action":"STOP_REVIEW_BUDGET_NO_AUTO_RETRY" if stop else "REVIEW_G3_ADMISSION" if ok and cohort=="diverse" else "DIVERSE_FRESH_WINDOW" if ok else "INSPECT_UNRESOLVED_ONLY_NO_AUTO_RETRY","automatic_live_admission":False,"predictive_skill":"UNKNOWN","direct_billing":"UNVERIFIED","published":0,"inference_calls":0}
 
 def tests():
     import tempfile
@@ -136,9 +148,9 @@ def tests():
         root=Path(tmp)
         r=consolidate("pilot",1,"head",root)
         require(r["status"]=="BLOCK" and r["dispatches_upper"]==12,"missing receipts admitted")
-        for c in COHORTS["pilot"]:
+        for i,c in enumerate(COHORTS["pilot"]):
             p=root/c;p.mkdir()
-            (p/"audit.json").write_text(json.dumps({"case":c,"cohort":"pilot","source_run":1,"source_head":"head","status":"PASS","dispatches_lower":3,"dispatches_upper":3}))
+            (p/"audit.json").write_text(json.dumps({"case":c,"cohort":"pilot","source_run":1,"source_head":"head","status":"PASS","dispatches_lower":3,"dispatches_upper":3,"source_job":i+1,"job_conclusion":"success","summary_sha256":"a"*64,"aggregation_max_abs_error":0,"inference_calls":0}))
         require(consolidate("pilot",1,"head",root)["status"]=="PASS_TECHNICAL_ONLY","complete cohort")
         (root/"F302"/"audit.json").unlink()
         r=consolidate("pilot",1,"head",root)
@@ -148,7 +160,26 @@ def tests():
         jobs={"jobs":[{"name":"real (F301, binary)","head_sha":"head","status":"completed","conclusion":"failure","id":2}]}
         a=audit("F301","pilot",1,"head",run,jobs,root)
         require(a["status"]=="BLOCK" and a["dispatches_upper"]==4,"failed job admitted")
-    print("FINALIZER_SYNTHETIC_PASS=5")
+        # New adversarial cases: a false PASS without receipt, zero dispatches,
+        # and an over-cap ledger with no summary must not pass or lose counts.
+        f=root/"F302"/"audit.json"
+        base=read(root/"F301"/"audit.json")|{"case":"F302","source_job":2}
+        f.write_text(json.dumps({k:v for k,v in base.items() if k!="summary_sha256"}))
+        require(consolidate("pilot",1,"head",root)["status"]=="BLOCK","missing receipt identity admitted")
+        f.write_text(json.dumps(base|{"dispatches_lower":0,"dispatches_upper":0}))
+        require(consolidate("pilot",1,"head",root)["status"]=="BLOCK","zero-call PASS admitted")
+        (root/"ledger.json").write_text(json.dumps([{}]*5))
+        (root/"direct-ledger.json").write_text("[]")
+        a=audit("F301","pilot",1,"head",run,jobs,root)
+        require(a["status"]=="STOP" and a["dispatches_lower"]==a["dispatches_upper"]==5,"excess count lost")
+        (root/"F301"/"audit.json").write_text(json.dumps(a))
+        f.write_text(json.dumps(base))
+        result=consolidate("pilot",1,"head",root)
+        require(result["status"]=="STOP" and result["dispatches_lower"]==result["dispatches_upper"]==11 and result["next_action"]=="STOP_REVIEW_BUDGET_NO_AUTO_RETRY","STOP erased by consolidation")
+        (root/"ledger.json").write_text(json.dumps([{}]*3))
+        a=audit("F301","pilot",1,"head",run,jobs,root)
+        require(a["status"]=="BLOCK" and a["dispatches_lower"]==3 and a["dispatches_upper"]==4,"missing summary erased ledger")
+    print("FINALIZER_SYNTHETIC_PASS=10")
 
 if __name__=="__main__":
     if sys.argv[1:]==["--test"]:tests()
